@@ -2,7 +2,7 @@ if ENABLE_QEMU_BLOCK
 xlator_LTLIBRARIES = qemu-block.la
 xlatordir = $(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features
 
-qemu_block_la_LDFLAGS = -module -avoid-version
+qemu_block_la_LDFLAGS = -module -avoid-version -no-undefined
 qemu_block_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la \
 	$(GLIB_LIBS) $(ZLIB_LIBS)
 

@@ -43,7 +43,9 @@
 
 #ifdef HAVE_MALLOC_STATS
 #ifdef DEBUG
+#ifndef GF_CYGWIN_HOST_OS
 #include <mcheck.h>
+#endif /* GF_CYGWIN_HOST_OS */
 #endif
 #endif
 
@@ -289,7 +291,7 @@ set_fuse_mount_options (glusterfs_ctx_t *ctx, dict_t *options)
                                        cmd_args->fuse_attribute_timeout);
 
                 if (ret < 0) {
-                        gf_msg ("glusterfsd", GF_LOG_ERROR, errno, 
+                        gf_msg ("glusterfsd", GF_LOG_ERROR, errno,
                                 glusterfsd_msg_4, ZR_ATTR_TIMEOUT_OPT);
                         goto err;
                 }

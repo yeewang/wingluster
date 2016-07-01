@@ -1,15 +1,22 @@
 libglusterfs_la_CFLAGS = $(GF_CFLAGS) $(GF_DARWIN_LIBGLUSTERFS_CFLAGS) \
-	-DDATADIR=\"$(localstatedir)\"
+	-DDATADIR=\"$(localstatedir)\" \
+	-I/usr/include/tirpc
 
 libglusterfs_la_CPPFLAGS = $(GF_CPPFLAGS) -D__USE_FILE_OFFSET64 \
 	-DXLATORDIR=\"$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator\" \
 	-DXLATORPARENTDIR=\"$(libdir)/glusterfs/$(PACKAGE_VERSION)\" \
 	-I$(top_srcdir)/rpc/rpc-lib/src/ -I$(CONTRIBDIR)/rbtree \
 	-I$(CONTRIBDIR)/libexecinfo ${ARGP_STANDALONE_CPPFLAGS} \
-	-DSBIN_DIR=\"$(sbindir)\" -I$(CONTRIBDIR)/timer-wheel
+	-DSBIN_DIR=\"$(sbindir)\" -I$(CONTRIBDIR)/timer-wheel \
+	-I/usr/include/tirpc
 
-libglusterfs_la_LIBADD = @LEXLIB@ $(ZLIB_LIBS) $(MATH_LIB) $(UUID_LIBS)
-libglusterfs_la_LDFLAGS = -version-info $(LIBGLUSTERFS_LT_VERSION)
+libglusterfs_la_LIBADD = @LEXLIB@ $(ZLIB_LIBS) $(MATH_LIB) $(UUID_LIBS) -ltirpc
+libglusterfs_la_LDFLAGS = -version-info $(LIBGLUSTERFS_LT_VERSION) -no-undefined
+#    -Wl,--out-implib=lib${module}.dll.a \
+#    -Wl,--export-all-symbols \
+#    -Wl,--enable-auto-import \
+#    -Wl,--whole-archive ${old_libs} \
+#    -Wl,--no-whole-archive ${dependency_libs}
 
 lib_LTLIBRARIES = libglusterfs.la
 libgfchangelogdir = $(includedir)/glusterfs/gfchangelog
@@ -25,7 +32,9 @@ libglusterfs_la_SOURCES = dict.c xlator.c logging.c \
 	circ-buff.c event-history.c gidcache.c ctx.c client_t.c event-poll.c \
 	event-epoll.c syncop-utils.c cluster-syncop.c refcount.c \
 	$(CONTRIBDIR)/libgen/basename_r.c \
-	$(CONTRIBDIR)/libgen/dirname_r.c $(CONTRIBDIR)/stdlib/gf_mkostemp.c \
+	$(CONTRIBDIR)/libgen/dirname_r.c \
+	$(CONTRIBDIR)/libgen/argp_r.c \
+	$(CONTRIBDIR)/stdlib/gf_mkostemp.c \
 	strfd.c parse-utils.c $(CONTRIBDIR)/mount/mntent.c \
 	$(CONTRIBDIR)/libexecinfo/execinfo.c quota-common-utils.c rot-buffs.c \
 	$(CONTRIBDIR)/timer-wheel/timer-wheel.c \

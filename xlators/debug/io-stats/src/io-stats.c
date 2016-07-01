@@ -216,6 +216,25 @@ is_fop_latency_started (call_frame_t *frame)
                 UNLOCK (&conf->lock);                                         \
         } while (0)
 
+#define UPDATE_PROFILE_STATS_FSYNC(frame)                                       \
+		do {																  \
+				struct ios_conf  *conf = NULL;								  \
+																			  \
+				if (!is_fop_latency_started (frame))						  \
+						break;												  \
+				conf = this->private;										  \
+				LOCK (&conf->lock); 										  \
+				{															  \
+						if (conf && conf->measure_latency &&				  \
+							conf->count_fop_hits) { 						  \
+								BUMP_FOP(FSYNC);								  \
+								gettimeofday (&frame->end, NULL);			  \
+								update_ios_latency (conf, frame, GF_FOP_##FSYNC);\
+						}													  \
+				}															  \
+				UNLOCK (&conf->lock);										  \
+		} while (0)
+
 #define BUMP_READ(fd, len)                                              \
         do {                                                            \
                 struct ios_conf  *conf = NULL;                          \
@@ -1447,7 +1466,7 @@ io_stats_fsync_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                     int32_t op_ret, int32_t op_errno,
                     struct iatt *prebuf, struct iatt *postbuf, dict_t *xdata)
 {
-        UPDATE_PROFILE_STATS (frame, FSYNC);
+        UPDATE_PROFILE_STATS_FSYNC(frame);
         STACK_UNWIND_STRICT (fsync, frame, op_ret, op_errno, prebuf, postbuf, xdata);
         return 0;
 }

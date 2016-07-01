@@ -371,7 +371,6 @@ glfsh_get_index_dir_loc (loc_t *rootloc, xlator_t *xl, loc_t *dirloc,
         if (ret)
                 goto out;
         glfs_loc_touchup (dirloc);
-
         ret = 0;
 out:
         if (xattr)

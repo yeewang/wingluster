@@ -39,6 +39,9 @@
 # ifdef __NetBSD__
 #  define _PATH_SETFATTR "/usr/pkg/bin/setfattr"
 # endif
+# ifdef GF_CYGWIN_HOST_OS
+#  define _PATH_SETFATTR "/usr/bin/setfattr"
+# endif
 #endif
 
 /* Any negative pid to make it special client */

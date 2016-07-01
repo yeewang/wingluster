@@ -258,8 +258,13 @@ fuse_mount_sys (const char *mountpoint, char *fsname,
         build_iovec (&iov, &iovlen, "fd", fdstr, -1);
         ret = nmount (iov, iovlen, mountflags);
 #else
+#ifndef GF_CYGWIN_HOST_OS
         ret = mount (source, mountpoint, fstype, mountflags,
                      mnt_param_mnt);
+#else
+		ret = mount (source, mountpoint, mountflags);
+#endif /* GF_CYGWIN_HOST_OS */
+
 #endif /* __FreeBSD__ */
 #ifdef GF_LINUX_HOST_OS
         if (ret == -1 && errno == ENODEV) {
@@ -273,8 +278,12 @@ fuse_mount_sys (const char *mountpoint, char *fsname,
 
                         goto out;
                 }
-                ret = mount (source, mountpoint, fstype, mountflags,
-                             mnt_param_mnt);
+#ifndef GF_CYGWIN_HOST_OS
+		        ret = mount (source, mountpoint, fstype, mountflags,
+		                     mnt_param_mnt);
+#else
+				ret = mount (source, mountpoint, mountflags);
+#endif /* GF_CYGWIN_HOST_OS */
         }
 #endif /* GF_LINUX_HOST_OS */
         if (ret == -1)

@@ -2,7 +2,9 @@ xlator_LTLIBRARIES = rot-13.la
 xlatordir = $(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/encryption
 
 rot_13_la_LDFLAGS = -module -avoid-version
-
+if GF_CYGWIN_HOST_OS
+rot_13_la_LDFLAGS += -no-undefined
+endif
 rot_13_la_SOURCES = rot-13.c
 rot_13_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la 
 

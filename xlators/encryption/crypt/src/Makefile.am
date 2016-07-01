@@ -4,6 +4,9 @@ xlator_LTLIBRARIES = crypt.la
 xlatordir = $(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/encryption
 
 crypt_la_LDFLAGS = -module -avoid-version
+if GF_CYGWIN_HOST_OS
+crypt_la_LDFLAGS += -no-undefined
+endif
 
 crypt_la_SOURCES = keys.c data.c metadata.c atom.c crypt.c
 crypt_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la -lssl -lcrypto

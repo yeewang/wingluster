@@ -2,7 +2,9 @@ xlator_LTLIBRARIES = bitrot-stub.la
 xlatordir = $(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features
 
 bitrot_stub_la_LDFLAGS = -module -avoid-version
-
+if GF_CYGWIN_HOST_OS
+bitrot_stub_la_LDFLAGS += -no-undefined
+endif
 bitrot_stub_la_SOURCES = bit-rot-stub-helpers.c bit-rot-stub.c
 bitrot_stub_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la
 

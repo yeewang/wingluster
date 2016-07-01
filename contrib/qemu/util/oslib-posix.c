@@ -57,7 +57,9 @@ extern int daemon(int, int);
 #include <sys/mman.h>
 
 #ifdef CONFIG_LINUX
+#ifndef GF_CYGWIN_HOST_OS
 #include <sys/syscall.h>
+#endif
 #endif
 
 int qemu_get_thread_id(void)

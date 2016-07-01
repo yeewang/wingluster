@@ -32,6 +32,31 @@
 #endif
 
 #ifndef HAVE_BACKTRACE
+#ifdef GF_CYGWIN_HOST_OS
+
+int
+backtrace(void **buffer, int size)
+{
+	return 0;
+}
+
+char **
+backtrace_symbols(void *const *buffer, int size)
+{
+	return 0;
+}
+
+void
+backtrace_symbols_fd(void *const *buffer, int size, int fd)
+{
+}
+
+void yylex()
+{
+}
+
+#else
+
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <dlfcn.h>
@@ -439,4 +464,5 @@ backtrace_symbols_fd(void *const *buffer, int size, int fd)
                         return;
         }
 }
+#endif
 #endif

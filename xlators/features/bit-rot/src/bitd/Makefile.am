@@ -2,7 +2,9 @@ xlator_LTLIBRARIES = bit-rot.la
 xlatordir = $(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features
 
 bit_rot_la_LDFLAGS = -module -avoid-version
-
+if GF_CYGWIN_HOST_OS
+bit_rot_la_LDFLAGS += -no-undefined
+endif
 AM_CPPFLAGS = $(GF_CPPFLAGS) -I$(top_srcdir)/libglusterfs/src \
 		 -I$(top_srcdir)/rpc/xdr/src/ \
 		 -I$(top_srcdir)/rpc/rpc-lib/src \

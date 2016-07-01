@@ -331,7 +331,11 @@ posix_do_chmod (xlator_t *this, const char *path, struct iatt *stbuf)
                 is_symlink = 1;
 
         mode = st_mode_from_ia (stbuf->ia_prot, stbuf->ia_type);
+#ifdef GF_CYGWIN_HOST_OS
+		ret = chmod (path, mode);
+#else
         ret = lchmod (path, mode);
+#endif
         if ((ret == -1) && (errno == ENOSYS)) {
                 /* in Linux symlinks are always in mode 0777 and no
                    such call as lchmod exists.

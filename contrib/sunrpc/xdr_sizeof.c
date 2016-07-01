@@ -60,7 +60,7 @@
  * when serialized using XDR.
  */
 
-#ifdef GF_DARWIN_HOST_OS
+#if defined(GF_DARWIN_HOST_OS) || defined(GF_CYGWIN_HOST_OS)
 
 #include <rpc/types.h>
 #include <rpc/xdr.h>
@@ -201,4 +201,4 @@ xdr_sizeof (xdrproc_t func, void *data)
                 free (x.x_private);
         return (stat == TRUE ? (unsigned) x.x_handy : 0);
 }
-#endif /* GF_DARWIN_HOST_OS */
+#endif /* GF_DARWIN_HOST_OS GF_CYGWIN_HOST_OS */

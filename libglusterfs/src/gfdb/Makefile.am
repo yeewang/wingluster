@@ -8,7 +8,7 @@ libgfdb_la_CPPFLAGS = $(GF_CPPFLAGS) -D__USE_FILE_OFFSET64 -fpic \
 libgfdb_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la \
   $(SQLITE_LIBS) $(UUID_LIBS)
 
-libgfdb_la_LDFLAGS = $(GF_LDFLAGS) -version-info $(LIBGLUSTERFS_LT_VERSION)
+libgfdb_la_LDFLAGS = $(GF_LDFLAGS) -version-info $(LIBGLUSTERFS_LT_VERSION) -no-undefined
 
 libgfdbdir = $(includedir)/glusterfs/gfdb
 

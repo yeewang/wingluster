@@ -12,7 +12,7 @@ libgfchangelog_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la \
 			   $(top_builddir)/rpc/xdr/src/libgfxdr.la \
 			   $(top_builddir)/rpc/rpc-lib/src/libgfrpc.la
 
-libgfchangelog_la_LDFLAGS = $(GF_LDFLAGS) -version-info $(LIBGFCHANGELOG_LT_VERSION)
+libgfchangelog_la_LDFLAGS = $(GF_LDFLAGS) -version-info $(LIBGFCHANGELOG_LT_VERSION)  -no-undefined
 
 libgfchangelogdir = $(includedir)/glusterfs/gfchangelog
 lib_LTLIBRARIES = libgfchangelog.la

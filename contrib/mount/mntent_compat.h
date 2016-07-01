@@ -11,7 +11,7 @@
 #ifndef _MNTENT_H
 #define _MNTENT_H
 
-#if !defined(GF_LINUX_HOST_OS)
+#if !defined(GF_LINUX_HOST_OS) || !defined(GF_CYGWIN_HOST_OS)
 #include <stdio.h>
 
 struct mntent {

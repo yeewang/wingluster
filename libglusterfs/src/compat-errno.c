@@ -891,6 +891,14 @@ init_compat_errno_arrays ()
 }
 #endif /* GF_LINUX_HOST_OS */
 
+#ifdef GF_CYGWIN_HOST_OS
+static void
+init_compat_errno_arrays ()
+{
+        /* Things are fine. Everything should work seemlessly on GNU/Linux machines */
+        return ;
+}
+#endif /* GF_CYGWIN_HOST_OS */
 
 static void
 init_errno_arrays ()

@@ -26,8 +26,8 @@ endif
 fuse_la_SOURCES = fuse-helpers.c fuse-resolve.c fuse-bridge.c \
 	$(CONTRIBDIR)/fuse-lib/misc.c $(mount_source)
 
-fuse_la_LDFLAGS = -module -avoid-version
-fuse_la_LIBADD = $(GF_LDADD) @GF_FUSE_LDADD@
+fuse_la_LDFLAGS = -module -avoid-version  -no-undefined
+fuse_la_LIBADD = $(GF_LDADD) @GF_FUSE_LDADD@ $(top_builddir)/libglusterfs/src/libglusterfs.la
 
 AM_CPPFLAGS = $(GF_CPPFLAGS) \
 	-I$(top_srcdir)/libglusterfs/src -I$(CONTRIBDIR)/fuse-include \

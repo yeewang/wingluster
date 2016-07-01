@@ -150,6 +150,21 @@ enum gfapi_callback_type {
         GFAPI_INODE_INVALIDATE, /* invalidate cache entry */
 };
 
+#ifndef GF_CYGWIN_HOST_OS
+
+#else
+#define pub_glfs_h_open                 glfs_h_open
+#define pub_glfs_h_close                glfs_h_close
+#define pub_glfs_h_create_from_handle   glfs_h_create_from_handle
+#define pub_glfs_h_lookupat             glfs_h_lookupat
+#define pub_glfs_h_opendir              glfs_h_opendir
+#define pub_glfs_h_getxattrs            glfs_h_getxattrs
+#define pub_glfs_h_stat                 glfs_h_stat
+#define pub_glfs_h_readlink             glfs_h_readlink
+#define pub_glfs_h_access               glfs_h_access
+#define pub_glfs_h_statfs               glfs_h_statfs
+#endif
+
 /* Handle based operations */
 /* Operations that generate handles */
 struct glfs_object *glfs_h_lookupat (struct glfs *fs,

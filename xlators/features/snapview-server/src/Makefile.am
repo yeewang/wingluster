@@ -1,7 +1,7 @@
 xlator_LTLIBRARIES = snapview-server.la
 xlatordir = $(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features
 
-snapview_server_la_LDFLAGS = -module -avoid-version
+snapview_server_la_LDFLAGS = -module -avoid-version -no-undefined
 
 snapview_server_la_SOURCES = snapview-server.c snapview-server-mgmt.c snapview-server-helpers.c
 snapview_server_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la\
@@ -16,6 +16,9 @@ AM_CPPFLAGS = $(GF_CPPFLAGS) -I$(top_srcdir)/libglusterfs/src \
                -I$(top_srcdir)/rpc/rpc-lib/src \
                -I$(top_srcdir)/rpc/xdr/src \
 	       -DDATADIR=\"$(localstatedir)\"
+		   -Wl,--enable-auto-import \
+		   -Wl,--whole-archive \
+		   -Wl,--no-whole-archive
 
 AM_CFLAGS = -Wall $(GF_CFLAGS)
 

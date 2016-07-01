@@ -19,18 +19,18 @@ AM_INIT_AUTOMAKE(tar-pax)
 #but libglusterfs fails to build with contrib (Then are not set up that way?)
 #AM_INIT_AUTOMAKE([subdir-objects])
 
-m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES(yes)])
+m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES(no)])
 
 if make --help 2>&1 | grep -q no-print-directory; then
-   AM_MAKEFLAGS="$AM_MAKEFLAGS --no-print-directory";
+   AM_MAKEFLAGS="$AM_MAKEFLAGS";
 fi
 
 if make --help 2>&1 | grep -q quiet; then
-   AM_MAKEFLAGS="$AM_MAKEFLAGS --quiet"
+   AM_MAKEFLAGS="$AM_MAKEFLAGS"
 fi
 
 if libtool --help 2>&1 | grep -q quiet; then
-   AM_LIBTOOLFLAGS="--quiet";
+   AM_LIBTOOLFLAGS="";
 fi
 
 AC_CONFIG_HEADERS([config.h])
@@ -377,7 +377,7 @@ AC_CHECK_LIB([crypto], [MD5], , AC_MSG_ERROR([OpenSSL crypto library is required
 
 AC_CHECK_LIB([pthread], [pthread_mutex_init], , AC_MSG_ERROR([Posix threads library is required to build glusterfs]))
 
-AC_CHECK_FUNC([dlopen], [has_dlopen=yes], AC_CHECK_LIB([dl], [dlopen], , AC_MSG_ERROR([Dynamic linking library required to build glusterfs])))
+# AC_CHECK_FUNC([dlopen], [has_dlopen=yes], AC_CHECK_LIB([dl], [dlopen], , AC_MSG_ERROR([Dynamic linking library required to build glusterfs])))
 
 AC_CHECK_LIB([readline], [rl_do_undo], [RL_UNDO="yes"], [RL_UNDO="no"])
 
@@ -428,6 +428,13 @@ case $host_os in
         USE_POSIX_ACLS='0'
         BUILD_POSIX_ACLS='no'
         ;;
+     cygwin*)
+		AC_MSG_WARN([cygwin/mingw does not friendly support POSIX ACLs... fix them])
+        #ACL_LIBS=''
+		ACL_LIBS='-lacl'
+        USE_POSIX_ACLS='1'
+        BUILD_POSIX_ACLS='yes'
+        ;;
      *)
         AC_CHECK_HEADERS([sys/acl.h], ,
                          AC_MSG_ERROR([Support for POSIX ACLs is required]))
@@ -445,6 +452,9 @@ case $host_os in
                 ;;
              darwin*)
                 ACL_LIBS='-lc'
+                ;;
+             cygwin*)
+                ACL_LIBS='-lacl'
                 ;;
         esac
         if test "x${ACL_LIBS}" = "x-lacl"; then
@@ -831,17 +841,17 @@ else
 fi
 # end of xml-output
 
-AC_CHECK_HEADERS([execinfo.h], [have_backtrace=yes])
-if test "x${have_backtrace}" = "xyes"; then
-   AC_DEFINE(HAVE_BACKTRACE, 1, [define if found backtrace])
-fi
-AC_SUBST(HAVE_BACKTRACE)
+#AC_CHECK_HEADERS([execinfo.h], [have_backtrace=yes])
+#if test "x${have_backtrace}" = "xyes"; then
+#   AC_DEFINE(HAVE_BACKTRACE, 1, [define if found backtrace])
+#fi
+#AC_SUBST(HAVE_BACKTRACE)
 
-if test "x${have_backtrace}" != "xyes"; then
-AC_TRY_COMPILE([#include <math.h>], [double x=0.0; x=ceil(0.0);],
-   [],
-   AC_MSG_ERROR([need math library for libexecinfo]))
-fi
+#if test "x${have_backtrace}" != "xyes"; then
+#AC_TRY_COMPILE([#include <math.h>], [double x=0.0; x=ceil(0.0);],
+#   [],
+#   AC_MSG_ERROR([need math library for libexecinfo]))
+#fi
 
 dnl glusterfs prints memory usage to stderr by sending it SIGUSR1
 AC_CHECK_FUNC([malloc_stats], [have_malloc_stats=yes])
@@ -957,6 +967,11 @@ else
     CFLAGS="$saved_CFLAGS $CFLAGS"
     GF_CFLAGS="$GF_CFLAGS $CFLAGS"
 fi
+
+#saved_CFLAGS=$CFLAGS
+#CFLAGS="-Wl,--allow-shlib-undefined"
+#CFLAGS="$saved_CFLAGS $CFLAGS"
+#GF_CFLAGS="$GF_CFLAGS $CFLAGS"
 
 dnl clang is mostly GCC-compatible, but its version is much lower,
 dnl so we have to check for it.
@@ -1080,11 +1095,25 @@ case $host_os in
         FUSERMOUNT_SUBDIR=""
         GLUSTERD_WORKDIR="${LOCALSTATEDIR}/db/glusterd"
         ;;
+      cygwin*)
+        GF_HOST_OS="GF_CYGWIN_HOST_OS"
+        GF_FUSE_CFLAGS="-DFUSERMOUNT_DIR=\\\"\$(bindir)\\\""
+        GLUSTERD_WORKDIR="${LOCALSTATEDIR}/lib/glusterd"
+#        GF_CFLAGS="${GF_CFLAGS} -DTHREAD_UNSAFE_BASENAME"
+#        GF_CFLAGS="${GF_CFLAGS} -DTHREAD_UNSAFE_DIRNAME"
+        GF_CFLAGS="${GF_CFLAGS} -I/usr/include/tirpc -I/usr/include/libxml2/libxml"
+        GF_LDFLAGS="${GF_LDFLAGS} -no-undefined"
+        enable_shared=yes; enable_static=no
+        ;;
 esac
 
 case $host_os in
      darwin*)
         GFAPI_EXTRA_LDFLAGS='-Wl,-alias_list,$(top_srcdir)/api/src/gfapi.aliases'
+        ;;
+     cygwin*)
+	    echo 'Disable gfapi dll version map on Windows platform'
+		GFAPI_EXTRA_LDFLAGS='-no-undefined'
         ;;
      *)
         GFAPI_EXTRA_LDFLAGS='-Wl,--version-script=$(top_srcdir)/api/src/gfapi.map'
@@ -1248,12 +1277,12 @@ if test "x$BUILD_GLUPY" = "xyes"; then
 fi
 # end glupy section
 
-dnl Check for userspace-rcu
-PKG_CHECK_MODULES([URCU], [liburcu-bp])
-PKG_CHECK_MODULES([URCU_CDS], [liburcu-cds >= 0.8], [],
-  [PKG_CHECK_MODULES([URCU_CDS], [liburcu-cds >= 0.7],
-    [AC_DEFINE(URCU_0_7, 1, [Define if liburcu 0.7 is found])],
-    [AC_MSG_ERROR([liburcu >= 0.7 required])])])
+#dnl Check for userspace-rcu
+#PKG_CHECK_MODULES([URCU], [liburcu-bp])
+#PKG_CHECK_MODULES([URCU_CDS], [liburcu-cds >= 0.8], [],
+#  [PKG_CHECK_MODULES([URCU_CDS], [liburcu-cds >= 0.7],
+#    [AC_DEFINE(URCU_0_7, 1, [Define if liburcu 0.7 is found])],
+#    [AC_MSG_ERROR([liburcu >= 0.7 required])])])
 
 BUILD_UNITTEST="no"
 AC_ARG_ENABLE([cmocka],
@@ -1314,6 +1343,7 @@ AC_SUBST([GF_CPPFLAGS])
 AM_CONDITIONAL([GF_LINUX_HOST_OS], test "${GF_HOST_OS}" = "GF_LINUX_HOST_OS")
 AM_CONDITIONAL([GF_DARWIN_HOST_OS], test "${GF_HOST_OS}" = "GF_DARWIN_HOST_OS")
 AM_CONDITIONAL([GF_BSD_HOST_OS], test "${GF_HOST_OS}" = "GF_BSD_HOST_OS")
+AM_CONDITIONAL([GF_CYGWIN_HOST_OS], test "${GF_HOST_OS}" = "GF_CYGWIN_HOST_OS")
 
 AC_SUBST(GLUSTERD_WORKDIR)
 AM_CONDITIONAL([GF_INSTALL_GLUSTERD_WORKDIR], test ! -d ${GLUSTERD_WORKDIR} && test -d ${sysconfdir}/glusterd )

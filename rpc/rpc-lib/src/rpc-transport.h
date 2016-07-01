@@ -21,7 +21,13 @@
 #ifdef GF_SOLARIS_HOST_OS
 #include <rpc/auth.h>
 #else
+
+#ifdef GF_CYGWIN_HOST_OS
 #include <rpc/rpc.h>
+#else
+#include <rpc/rpc.h>
+#endif
+
 #endif
 
 #include <rpc/rpc_msg.h>

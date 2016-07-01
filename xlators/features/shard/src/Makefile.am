@@ -3,6 +3,10 @@ xlatordir = $(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features
 
 shard_la_LDFLAGS = -module -avoid-version
 
+if GF_CYGWIN_HOST_OS
+shard_la_LDFLAGS += -no-undefined
+endif
+
 shard_la_SOURCES = shard.c
 
 shard_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la
