@@ -31,7 +31,7 @@ glusterd_la_LIBADD += -llvm2app
 endif
 
 if GF_CYGWIN_HOST_OS
-glusterd_la_LIBADD += -lurcu
+glusterd_la_LIBADD += /usr/local/lib/liburcu-bp.la
 endif
 
 noinst_HEADERS = glusterd.h glusterd-utils.h glusterd-op-sm.h \

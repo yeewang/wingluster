@@ -946,8 +946,8 @@ __socket_keepalive (int fd, int family, int keepalive_intvl,
         ret = setsockopt (fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive_intvl,
                           sizeof (keepalive_intvl));
 #elif defined(GF_CYGWIN_HOST_OS)
-	#warning TODO in windows
-
+        ret = setsockopt (fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive_intvl,
+                  sizeof (keepalive_intvl));
 #else
         ret = setsockopt (fd, IPPROTO_TCP, TCP_KEEPALIVE, &keepalive_intvl,
                           sizeof (keepalive_intvl));
@@ -2393,7 +2393,8 @@ socket_connect_finish (rpc_transport_t *this)
                 if (ret == -1 && errno != EINPROGRESS) {
                         if (!priv->connect_finish_log) {
                                 gf_log (this->name, GF_LOG_ERROR,
-                                        "connection to %s failed (%s)",
+                                        "sock %d connection to %s failed (%s)",
+                                        priv->sock,
                                         this->peerinfo.identifier,
                                         strerror (errno));
                                 priv->connect_finish_log = 1;
@@ -3047,6 +3048,19 @@ socket_connect (rpc_transport_t *this, int port)
                         goto unlock;
                 }
 
+#ifdef GF_CYGWIN_HOST_OS
+                int opt = 1;
+                if (setsockopt (priv->sock, SOL_SOCKET, SO_REUSEADDR,
+                                &opt,
+                                sizeof (opt)) < 0) {
+                        gf_log (this->name, GF_LOG_ERROR,
+                                "setting socket connect "
+                                "failed: %d: %s",
+                                priv->sock,
+                                strerror (errno));
+                }
+#endif
+
                 /* Cant help if setting socket options fails. We can continue
                  * working nonetheless.
                  */
@@ -3128,6 +3142,7 @@ socket_connect (rpc_transport_t *this, int port)
                                 goto handler;
                         }
                 }
+                priv->connected = 0;
 
                 ret = connect (priv->sock, SA (&this->peerinfo.sockaddr),
                                this->peerinfo.sockaddr_len);
@@ -3196,7 +3211,7 @@ handler:
                  * In the own_thread case, this is used to indicate that we're
                  * initializing a client connection.
                  */
-                priv->connected = 0;
+                //priv->connected = 0;
                 priv->is_server = _gf_false;
                 rpc_transport_ref (this);
                 refd = _gf_true;
@@ -3221,7 +3236,17 @@ handler:
                                 priv->sock = -1;
                                 ret = -1;
                         }
+
+                        gf_log (this->name, GF_LOG_ERROR,
+                        "ddddddddddddddddddddddddddddddddddddddddddddddd"
+                       );
                 }
+
+
+gf_log (this->name, GF_LOG_ERROR,
+                        "ffffffffffffffffffffffffffffffffffffffffffff"
+                       );
+
 
 unlock:
                 sock = priv->sock;
@@ -3250,6 +3275,9 @@ err:
                         GF_ASSERT (0);
                 }
         }
+
+                        gf_log (this->name, GF_LOG_ERROR,
+                        "oooooooooooooooooooooooooooooooooooooooo");
 
         return ret;
 }

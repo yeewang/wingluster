@@ -18,12 +18,21 @@ AM_LDFLAGS = -L$(xlatordir)
 CLEANFILES =
 
 access-control-compat:
+if GF_CYGWIN_HOST_OS
+	mkdir -p $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features
+	rm -rf $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features/access-control.dll
+	cp .libs/posix-acl.dll $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features/access-control.dll
+else
 	mkdir -p $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features
 	rm -rf $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features/access-control.so
 	ln -s ../system/posix-acl.so $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features/access-control.so
-
+endif
 
 install-exec-local: access-control-compat
 
 uninstall-local:
+if GF_CYGWIN_HOST_OS
+	rm -f $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features/access-control.dll
+else
 	rm -f $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/features/access-control.so
+endif

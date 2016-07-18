@@ -860,7 +860,7 @@ static int do_mount(const char *mnt, char **typep, mode_t rootmode,
 #ifndef GF_CYGWIN_HOST_OS
 		res = mount(source, mnt, type, flags, optbuf);
 #else
-			res = mount(source, mnt, type);
+		res = mount(source, mnt, type);
 #endif
 	}
 	if (res == -1) {

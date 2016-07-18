@@ -2003,7 +2003,11 @@ static int
 tier_load_externals (xlator_t *this)
 {
         int               ret            = -1;
+#ifdef GF_CYGWIN_HOST_OS
+        char *libpathfull = (LIBDIR "/cyggfdb-0.dll");
+#else
         char *libpathfull = (LIBDIR "/libgfdb.so.0");
+#endif /* GF_CYGWIN_HOST_OS */
         get_gfdb_methods_t get_gfdb_methods;
 
         GF_VALIDATE_OR_GOTO ("this", this, out);

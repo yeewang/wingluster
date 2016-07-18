@@ -10,7 +10,7 @@ libglusterfs_la_CPPFLAGS = $(GF_CPPFLAGS) -D__USE_FILE_OFFSET64 \
 	-DSBIN_DIR=\"$(sbindir)\" -I$(CONTRIBDIR)/timer-wheel \
 	-I/usr/include/tirpc
 
-libglusterfs_la_LIBADD = @LEXLIB@ $(ZLIB_LIBS) $(MATH_LIB) $(UUID_LIBS) -ltirpc
+libglusterfs_la_LIBADD = $(ZLIB_LIBS) $(MATH_LIB) $(UUID_LIBS) -ltirpc
 libglusterfs_la_LDFLAGS = -version-info $(LIBGLUSTERFS_LT_VERSION) -no-undefined
 #    -Wl,--out-implib=lib${module}.dll.a \
 #    -Wl,--export-all-symbols \
@@ -33,7 +33,6 @@ libglusterfs_la_SOURCES = dict.c xlator.c logging.c \
 	event-epoll.c syncop-utils.c cluster-syncop.c refcount.c \
 	$(CONTRIBDIR)/libgen/basename_r.c \
 	$(CONTRIBDIR)/libgen/dirname_r.c \
-	$(CONTRIBDIR)/libgen/argp_r.c \
 	$(CONTRIBDIR)/stdlib/gf_mkostemp.c \
 	strfd.c parse-utils.c $(CONTRIBDIR)/mount/mntent.c \
 	$(CONTRIBDIR)/libexecinfo/execinfo.c quota-common-utils.c rot-buffs.c \

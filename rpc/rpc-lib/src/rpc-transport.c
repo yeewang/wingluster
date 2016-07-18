@@ -279,7 +279,12 @@ rpc_transport_load (glusterfs_ctx_t *ctx, dict_t *options, char *trans_name)
 		goto fail;
 	}
 
-	ret = gf_asprintf (&name, "%s/%s.so", RPC_TRANSPORTDIR, type);
+#ifdef GF_CYGWIN_HOST_OS
+	ret = gf_asprintf (&name, "%s/%s.dll", RPC_TRANSPORTDIR, type);
+#else
+        ret = gf_asprintf (&name, "%s/%s.so", RPC_TRANSPORTDIR, type);
+#endif
+
         if (-1 == ret) {
                 goto fail;
         }

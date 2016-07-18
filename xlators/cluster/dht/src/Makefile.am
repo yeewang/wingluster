@@ -44,10 +44,18 @@ AM_CPPFLAGS = $(GF_CPPFLAGS) -I$(top_srcdir)/libglusterfs/src \
 CLEANFILES =
 
 uninstall-local:
+if GF_CYGWIN_HOST_OS
+	rm -f $(DESTDIR)$(xlatordir)/distribute.dll
+else
 	rm -f $(DESTDIR)$(xlatordir)/distribute.so
+endif
 
 install-data-hook:
+if GF_CYGWIN_HOST_OS
+	cp .libs/dht.dll $(DESTDIR)$(xlatordir)/distribute.dll
+else
 	ln -sf dht.so $(DESTDIR)$(xlatordir)/distribute.so
+endif
 
 if UNITTEST
 CLEANFILES += *.gcda *.gcno *_xunit.xml

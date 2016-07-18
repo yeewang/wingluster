@@ -64,6 +64,11 @@ AC_CONFIG_FILES([Makefile
                 xlators/mount/fuse/utils/mount.glusterfs
                 xlators/mount/fuse/utils/mount_glusterfs
                 xlators/mount/fuse/utils/Makefile
+				xlators/mount/dokan/Makefile
+                xlators/mount/dokan/src/Makefile
+                xlators/mount/dokan/utils/mount.glusterfs
+                xlators/mount/dokan/utils/mount_glusterfs
+                xlators/mount/dokan/utils/Makefile
                 xlators/storage/Makefile
                 xlators/storage/posix/Makefile
                 xlators/storage/posix/src/Makefile
@@ -1098,9 +1103,9 @@ case $host_os in
       cygwin*)
         GF_HOST_OS="GF_CYGWIN_HOST_OS"
         GF_FUSE_CFLAGS="-DFUSERMOUNT_DIR=\\\"\$(bindir)\\\""
+		BUILD_FUSE_CLIENT=yes
+        FUSE_CLIENT_SUBDIR="dokan"
         GLUSTERD_WORKDIR="${LOCALSTATEDIR}/lib/glusterd"
-#        GF_CFLAGS="${GF_CFLAGS} -DTHREAD_UNSAFE_BASENAME"
-#        GF_CFLAGS="${GF_CFLAGS} -DTHREAD_UNSAFE_DIRNAME"
         GF_CFLAGS="${GF_CFLAGS} -I/usr/include/tirpc -I/usr/include/libxml2/libxml"
         GF_LDFLAGS="${GF_LDFLAGS} -no-undefined"
         enable_shared=yes; enable_static=no

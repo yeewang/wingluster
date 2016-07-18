@@ -130,10 +130,20 @@ xlator_volopt_dynload (char *xlator_type, void **dl_handle,
 
         /* socket.so doesn't fall under the default xlator directory, hence we
          * need this check */
-        if (!strstr(xlator_type, "rpc-transport"))
+        if (!strstr(xlator_type, "rpc-transport")) {
+#ifdef GF_CYGWIN_HOST_OS
+                ret = gf_asprintf (&name, "%s/%s.dll", XLATORDIR, xlator_type);
+#else
                 ret = gf_asprintf (&name, "%s/%s.so", XLATORDIR, xlator_type);
-        else
+#endif
+        }
+        else {
+#ifdef GF_CYGWIN_HOST_OS
+                ret = gf_asprintf (&name, "%s/%s.dll", XLATORPARENTDIR, xlator_type);
+#else
                 ret = gf_asprintf (&name, "%s/%s.so", XLATORPARENTDIR, xlator_type);
+#endif
+        }
         if (-1 == ret) {
                 goto out;
         }
@@ -183,8 +193,11 @@ xlator_dynload (xlator_t *xl)
         GF_VALIDATE_OR_GOTO ("xlator", xl, out);
 
         INIT_LIST_HEAD (&xl->volume_options);
-
+#ifdef GF_CYGWIN_HOST_OS
+        ret = gf_asprintf (&name, "%s/%s.dll", XLATORDIR, xl->type);
+#else
         ret = gf_asprintf (&name, "%s/%s.so", XLATORDIR, xl->type);
+#endif
         if (-1 == ret) {
                 goto out;
         }
@@ -196,7 +209,7 @@ xlator_dynload (xlator_t *xl)
         handle = dlopen (name, RTLD_NOW|RTLD_GLOBAL);
         if (!handle) {
                 gf_msg ("xlator", GF_LOG_WARNING, 0, LG_MSG_DLOPEN_FAILED,
-                        "%s", dlerror ());
+                        "%s;%s", dlerror (),name);
                 goto out;
         }
         xl->dlhandle = handle;

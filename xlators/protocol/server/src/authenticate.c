@@ -49,7 +49,11 @@ init (dict_t *this, char *key, data_t *value, void *data)
                 key = "addr";
         }
 
+#ifdef GF_CYGWIN_HOST_OS
+        ret = gf_asprintf (&auth_file, "%s/%s.dll", LIBDIR, key);
+#else
         ret = gf_asprintf (&auth_file, "%s/%s.so", LIBDIR, key);
+#endif /* GF_CYGWIN_HOST_OS */
         if (-1 == ret) {
                 dict_set (this, key, data_from_dynptr (NULL, 0));
                 *error = -1;

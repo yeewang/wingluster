@@ -17,7 +17,15 @@ AM_CFLAGS = -Wall -fno-strict-aliasing $(GF_CFLAGS)
 CLEANFILES = 
 
 uninstall-local:
+if GF_CYGWIN_HOST_OS
+	rm -f $(DESTDIR)$(xlatordir)/posix-locks.dll
+else
 	rm -f $(DESTDIR)$(xlatordir)/posix-locks.so
+endif
 
 install-data-hook:
+if GF_CYGWIN_HOST_OS
+	cp .libs/locks.dll $(DESTDIR)$(xlatordir)/posix-locks.dll
+else
 	ln -sf locks.so $(DESTDIR)$(xlatordir)/posix-locks.so
+endif
