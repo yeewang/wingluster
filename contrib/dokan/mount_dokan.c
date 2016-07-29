@@ -1,4 +1,5 @@
 
+#include <sys/cygwin.h>
 #include "fuse.h"
 #include "mount_util.h"
 #include "mount-gluster-compat.h"
@@ -8,13 +9,17 @@
 #else
 #define FUSERMOUNT_PROG "fusermount"
 #endif
-#define FUSE_DEVFD_ENV "_FUSE_DEVFD"
 
-#ifdef __FreeBSD__
-#include <sys/types.h>
-#include <sys/uio.h>
-#include <unistd.h>
-#endif /* __FreeBSD__ */
+
+/* Conversion from cygwin path to windows path */
+static const char *
+create_winpath_from_cygpath(const char *cygpath)
+{
+        const char *winpath;
+        winpath = (const char *)cygwin_create_path (
+                CCP_POSIX_TO_WIN_A | CCP_ABSOLUTE, cygpath);
+        return winpath;
+}
 
 /* FUSE: function is called fuse_kern_unmount() */
 void
@@ -97,63 +102,28 @@ escape (char *s)
         return e;
 }
 
-static struct fuse_operations xmp_oper = {
-#ifdef NEVER
-	.getattr	= xmp_getattr,
-	.access		= xmp_access,
-	.readlink	= xmp_readlink,
-	.readdir	= xmp_readdir,
-	.mknod		= xmp_mknod,
-	.mkdir		= xmp_mkdir,
-	.symlink	= xmp_symlink,
-	.unlink		= xmp_unlink,
-	.rmdir		= xmp_rmdir,
-	.rename		= xmp_rename,
-	.link		= xmp_link,
-	.chmod		= xmp_chmod,
-	.chown		= xmp_chown,
-	.truncate	= xmp_truncate,
-#ifdef HAVE_UTIMENSAT
-	.utimens	= xmp_utimens,
-#endif
-	.open		= xmp_open,
-	.read		= xmp_read,
-	.write		= xmp_write,
-	.statfs		= xmp_statfs,
-	.release	= xmp_release,
-	.fsync		= xmp_fsync,
-#ifdef HAVE_POSIX_FALLOCATE
-	.fallocate	= xmp_fallocate,
-#endif
-#ifdef HAVE_SETXATTR
-	.setxattr	= xmp_setxattr,
-	.getxattr	= xmp_getxattr,
-	.listxattr	= xmp_listxattr,
-	.removexattr	= xmp_removexattr,
-#endif
-#endif /* NEVER */
-};
-
+extern struct fuse_operations dokan_operations;
 
 static int
 fuse_mount_sys (const char *mountpoint, char *fsname,
-                unsigned long mountflags, char *mnt_param, int fd)
+                unsigned long mountflags, char *mnt_param)
 {
         int ret = -1;
         unsigned mounted = 0;
 
-        int argc = 6;
+        int argc = 7;
         char *argv[12];
         argv[0] = "dokan";
         argv[1] = "-o";
         argv[2] = "volname=gluster";
         argv[3] = "-o";
         argv[4] = "fsname=glusterfs";
-        argv[5] = mountpoint;
-        argv[6] = NULL;
+        argv[5] = "-d";
+        argv[6] = mountpoint;
+        argv[7] = NULL;
 
         umask(0);
-        ret = fuse_main_real(argc, argv, &xmp_oper, sizeof(xmp_oper), NULL);
+        ret = fuse_main_real(argc, argv, &dokan_operations, sizeof(dokan_operations), NULL);
 
         if (ret != 0)
                 goto out;
@@ -173,48 +143,31 @@ out:
 int
 gf_fuse_mount (const char *mountpoint, char *fsname,
                unsigned long mountflags, char *mnt_param,
-               pid_t *mnt_pid, int status_fd)
+               int status_fd)
 {
-        int   fd  = -1;
         pid_t pid = -1;
         int   ret = -1;
+        const char *winpath = NULL;
+
+        /* convert cygwin path to Windows */
+        winpath = create_winpath_from_cygpath (mountpoint);
+        if (winpath == NULL)
+                GFFUSE_LOGERR ("Convert linux path(%s) to windows failed",
+                        mountpoint);
 
         /* start mount agent */
-        pid = fork();
-        switch (pid) {
-        case 0:
-                /* hello it's mount agent */
-                if (!mnt_pid) {
-                        /* daemonize mount agent, caller is
-                         * not interested in waiting for it
-                         */
-                        pid = fork ();
-                        if (pid)
-                                exit (pid == -1 ? 1 : 0);
-                }
+        ret = fuse_mount_sys (winpath, fsname, mountflags, mnt_param);
+        if (ret != 0)
+                GFFUSE_LOGERR ("mount of %s to %s (%s) failed",
+                               fsname, mountpoint, mnt_param);
 
+        free (winpath);
+        gf_log ("glusterfs-fuse", GF_LOG_INFO, "mount agent exited.",
+               fsname, mountpoint, mnt_param);
 
-                /* start mount agent */
-                ret = fuse_mount_sys (mountpoint, fsname, mountflags, mnt_param,
-                      fd);
-                if (ret == -1)
-                        GFFUSE_LOGERR ("mount of %s to %s (%s) failed",
-                                       fsname, mountpoint, mnt_param);
+        if (status_fd >= 0)
+                (void)write (status_fd, &ret, sizeof (ret));
 
-                if (status_fd >= 0)
-                        (void)write (status_fd, &ret, sizeof (ret));
-
-                exit (!!ret);
-                /* bye mount agent */
-        case -1:
-                close (fd);
-                fd = -1;
-        }
-
-        if (mnt_pid)
-               *mnt_pid = pid;
-
-        /* Windows always returns 0. */
-        return 0;
+        return ret;
 }
 

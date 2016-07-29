@@ -8,6 +8,13 @@
 */
 
 void gf_fuse_unmount (const char *mountpoint, int fd);
+#ifndef GF_CYGWIN_HOST_OS
 int gf_fuse_mount (const char *mountpoint, char *fsname,
                    unsigned long mountflags, char *mnt_param,
                    pid_t *mtab_pid, int status_fd);
+#else
+int gf_fuse_mount (const char *mountpoint, char *fsname,
+              unsigned long mountflags, char *mnt_param,
+              int status_fd);
+#endif /* GF_CYGWIN_HOST_OS */
+

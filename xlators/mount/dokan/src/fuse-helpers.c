@@ -1,25 +1,9 @@
 /*
-   Copyright (c) 2010-2012 Red Hat, Inc. <http://www.redhat.com>
-   This file is part of GlusterFS.
-
-   This file is licensed to you under your choice of the GNU Lesser
-   General Public License, version 3 or any later version (LGPLv3 or
-   later), or the GNU General Public License, version 2 (GPLv2), in all
-   cases as published by the Free Software Foundation.
+   Copyright (c) 2016 StorSwift, Inc.
+   Wang Yi wangyi8848@gmail.com
 */
-#ifdef __NetBSD__
-#define _KMEMUSER
-#endif
 
-#if defined(GF_SOLARIS_HOST_OS)
-#include <sys/procfs.h>
-#elif defined(__FreeBSD__)
-#include <sys/types.h>
-#include <libutil.h>
-#include <sys/user.h>
-#elif defined(CTL_KERN)
-#include <sys/sysctl.h>
-#endif
+#include <fuse.h>
 #include <pwd.h>
 #include <grp.h>
 
@@ -120,7 +104,7 @@ get_fuse_state (xlator_t *this, fuse_in_header_t *finh)
         if (!state)
                 return NULL;
 
-	state->this = THIS;
+	state->this = get_fuse_xlator();
         priv = this->private;
 
         pthread_mutex_lock (&priv->sync_mutex);
@@ -134,7 +118,6 @@ get_fuse_state (xlator_t *this, fuse_in_header_t *finh)
 	state->itable = active_subvol->itable;
 
         state->pool = this->ctx->pool;
-        state->finh = finh;
         state->this = this;
 
         LOCK_INIT (&state->lock);
@@ -282,6 +265,9 @@ out:
         for (i = 0; i < ngroups; i++)
                 frame->root->groups[i] = kp.kp_eproc.e_ucred.cr_groups[i];
         frame->root->ngrps = ngroups;
+#elif defined(GF_CYGWIN_HOST_OS)
+        // TODO:
+        frame->root->ngrps = 0;
 #else
         frame->root->ngrps = 0;
 #endif /* GF_LINUX_HOST_OS */
@@ -678,3 +664,10 @@ fuse_check_selinux_cap_xattr (fuse_private_t *priv, char *name)
 out:
         return ret;
 }
+
+struct fuse_context *get_fuse_header_in(void)
+{
+        struct fuse_context *ctx = fuse_get_context();
+        return ctx;
+}
+

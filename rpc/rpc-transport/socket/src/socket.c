@@ -3236,17 +3236,7 @@ handler:
                                 priv->sock = -1;
                                 ret = -1;
                         }
-
-                        gf_log (this->name, GF_LOG_ERROR,
-                        "ddddddddddddddddddddddddddddddddddddddddddddddd"
-                       );
                 }
-
-
-gf_log (this->name, GF_LOG_ERROR,
-                        "ffffffffffffffffffffffffffffffffffffffffffff"
-                       );
-
 
 unlock:
                 sock = priv->sock;
@@ -3275,9 +3265,6 @@ err:
                         GF_ASSERT (0);
                 }
         }
-
-                        gf_log (this->name, GF_LOG_ERROR,
-                        "oooooooooooooooooooooooooooooooooooooooo");
 
         return ret;
 }

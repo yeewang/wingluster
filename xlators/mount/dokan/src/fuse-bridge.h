@@ -60,7 +60,6 @@ typedef void (fuse_handler_t) (xlator_t *this, fuse_in_header_t *finh,
                                void *msg);
 
 struct fuse_private {
-        int                  fd;
         uint32_t             proto_minor;
         char                *volfile;
         size_t               volfile_size;
@@ -231,7 +230,7 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                         send_fuse_err (this, finh, ENOMEM);                \
                         GF_FREE (finh);                                    \
                                                                            \
-                        return;                                            \
+                        return -1;                                         \
                 }                                                          \
         } while (0)
 
@@ -428,4 +427,17 @@ int fuse_ignore_xattr_set (fuse_private_t *priv, char *key);
 void fuse_fop_resume (fuse_state_t *state);
 int dump_history_fuse (circular_buffer_t *cb, void *data);
 int fuse_check_selinux_cap_xattr (fuse_private_t *priv, char *name);
+
+xlator_t *get_fuse_xlator();
+struct fuse_context *get_fuse_header_in(void);
+
+struct mount_data {
+        struct fuse_private *private;
+        const char *mountpoint;
+        char *fsname;
+        unsigned long mountflags;
+        char *mnt_param;
+        int status_fd;
+};
+
 #endif /* _GF_FUSE_BRIDGE_H_ */
