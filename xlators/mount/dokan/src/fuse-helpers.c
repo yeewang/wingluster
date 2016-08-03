@@ -93,18 +93,19 @@ free_fuse_state (fuse_state_t *state)
 
 
 fuse_state_t *
-get_fuse_state (xlator_t *this, fuse_in_header_t *finh)
+get_fuse_state (xlator_t *this, char *path, fuse_in_header_t *finh)
 {
         fuse_state_t   *state         = NULL;
 	xlator_t       *active_subvol = NULL;
         fuse_private_t *priv          = NULL;
+        inode_t        *inode         = NULL;
 
         state = (void *)GF_CALLOC (1, sizeof (*state),
                                    gf_fuse_mt_fuse_state_t);
         if (!state)
                 return NULL;
 
-	state->this = get_fuse_xlator();
+	state->this = THIS;
         priv = this->private;
 
         pthread_mutex_lock (&priv->sync_mutex);
@@ -117,8 +118,21 @@ get_fuse_state (xlator_t *this, fuse_in_header_t *finh)
 	state->active_subvol = active_subvol;
 	state->itable = active_subvol->itable;
 
+#ifdef NEVER
+        if (path != NULL && finh->nodeid == 0) {
+                inode_t *inode = fuse_inode_from_path(state->this, path);
+                //        inode_resolve(state->itable, path);
+                finh->nodeid = inode_to_fuse_nodeid(inode);
+        }
+        else {
+                finh->nodeid = 0;
+        }
+#endif /* NEVER */
+
         state->pool = this->ctx->pool;
+        state->finh = finh;
         state->this = this;
+        state->stub = NULL;
 
         LOCK_INIT (&state->lock);
 
@@ -513,6 +527,31 @@ gf_fuse_stat2attr (struct iatt *st, struct fuse_attr *fa, gf_boolean_t enable_in
 }
 
 void
+gf_fuse_stat2winstat(struct iatt *st, struct FUSE_STAT *stbuf)
+{
+        stbuf->st_dev = st->ia_dev;
+        stbuf->st_ino = st->ia_ino;
+        stbuf->st_mode = st_mode_from_ia (st->ia_prot, st->ia_type);
+        stbuf->st_nlink = st->ia_nlink;
+        stbuf->st_uid = st->ia_uid;
+        stbuf->st_gid = st->ia_gid;
+        stbuf->st_rdev = makedev (ia_major (st->ia_rdev),
+                                  ia_minor (st->ia_rdev));
+        stbuf->st_size = st->ia_size;
+        stbuf->st_atim.tv_sec = st->ia_atime;
+        stbuf->st_atim.tv_nsec = st->ia_atime_nsec;
+        stbuf->st_mtim.tv_sec = st->ia_mtime;
+        stbuf->st_mtim.tv_nsec = st->ia_mtime_nsec;
+        stbuf->st_ctim.tv_sec = st->ia_ctime;
+        stbuf->st_ctim.tv_nsec = st->ia_ctime_nsec;
+
+        stbuf->st_blksize = st->ia_blksize;
+        stbuf->st_blocks = st->ia_blocks;
+        stbuf->st_birthtim.tv_sec = -1;
+        stbuf->st_birthtim.tv_nsec = -1;
+}
+
+void
 gf_fuse_fill_dirent (gf_dirent_t *entry, struct fuse_dirent *fde, gf_boolean_t enable_ino32)
 {
         if (enable_ino32)
@@ -524,6 +563,13 @@ gf_fuse_fill_dirent (gf_dirent_t *entry, struct fuse_dirent *fde, gf_boolean_t e
         fde->type        = entry->d_type;
         fde->namelen     = strlen (entry->d_name);
         strncpy (fde->name, entry->d_name, fde->namelen);
+}
+
+void
+gf_fuse_dirent2winstat (struct fuse_dirent *ent, struct FUSE_STAT *stbuf)
+{
+        stbuf->st_ino = ent->ino;
+        stbuf->st_mode = ent->type << 12;
 }
 
 static int
@@ -669,5 +715,23 @@ struct fuse_context *get_fuse_header_in(void)
 {
         struct fuse_context *ctx = fuse_get_context();
         return ctx;
+}
+
+uint64_t get_fuse_op_unique()
+{
+        static uint64_t seed = 0;
+        return __sync_fetch_and_add(&seed, 1);
+}
+
+inode_t *
+fuse_inode_from_path (xlator_t * this, const char * path)
+{
+        if (strcmp(path, "/") == 0) {
+                xlator_t *active_subvol = fuse_active_subvol (this);
+                if (active_subvol)
+                        return active_subvol->itable->root;
+        }
+
+        return inode_resolve(this->itable, path);
 }
 

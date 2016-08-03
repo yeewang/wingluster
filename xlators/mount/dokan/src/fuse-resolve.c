@@ -458,7 +458,7 @@ fuse_migrate_fd_error (xlator_t *this, fd_t *fd)
         } while (0);
 
 
-static int
+int
 fuse_resolve_fd (fuse_state_t *state)
 {
         fuse_resolve_t *resolve            = NULL;
@@ -635,7 +635,6 @@ fuse_resolve_fd_init (fuse_state_t *state, fuse_resolve_t *resolve,
 	return 0;
 }
 
-
 static int
 fuse_resolve (fuse_state_t *state)
 {
@@ -724,3 +723,4 @@ fuse_resolve_and_resume (fuse_state_t *state, fuse_resume_fn_t fn)
 
         return 0;
 }
+

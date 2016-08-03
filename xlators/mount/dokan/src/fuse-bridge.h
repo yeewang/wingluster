@@ -18,6 +18,8 @@
 #include <sys/mount.h>
 #include <sys/time.h>
 #include <fnmatch.h>
+#include <errno.h>
+
 
 #ifndef _CONFIG_H
 #define _CONFIG_H
@@ -219,7 +221,7 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
 
 #define GET_STATE(this, finh, state)                                       \
         do {                                                               \
-                state = get_fuse_state (this, finh);                       \
+                state = get_fuse_state (this, NULL, finh);                 \
                 if (!state) {                                              \
                         gf_log ("glusterfs-fuse",                          \
                                 GF_LOG_ERROR,                              \
@@ -233,6 +235,85 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                         return -1;                                         \
                 }                                                          \
         } while (0)
+
+#define FILL_STATE(this, path, finh, state)                                \
+        do {                                                               \
+                state = get_fuse_state (this, path, finh);                 \
+                if (!state) {                                              \
+                        gf_log ("glusterfs-fuse",                          \
+                                GF_LOG_ERROR,                              \
+                                "FUSE message unique %"PRIu64" opcode %d:" \
+                                " state allocation failed",                \
+                                finh->unique, finh->opcode);               \
+                                                                           \
+                        send_fuse_err (this, finh, ENOMEM);                \
+                        GF_FREE (finh);                                    \
+                                                                           \
+                        return -1;                                         \
+                }                                                          \
+                if (path) {                                                \
+                        inode_t *inode = NULL;                             \
+                        if (strcmp(path, "/") == 0) {                      \
+                                xlator_t *active_subvol = fuse_active_subvol (this); \
+                                if (active_subvol)                         \
+                                        inode =  active_subvol->itable->root; \
+                        }                                                  \
+                        else {                                             \
+                                inode = inode_resolve(state->itable, path);\
+                        }                                                  \
+                        state->finh->nodeid = inode_to_fuse_nodeid(inode); \
+                }                                                          \
+        } while (0)
+
+
+#define INIT_FUSE_HEADER(_finh, _opcode, _ctx)                             \
+        do {                                                               \
+                const size_t msg0_size = sizeof (*finh);                   \
+                (_finh) = GF_CALLOC (1, msg0_size, gf_fuse_mt_iov_base);   \
+                (_finh)->len = msg0_size;                                  \
+                (_finh)->opcode = _opcode;                                 \
+                (_finh)->unique = get_fuse_op_unique();                    \
+                (_finh)->nodeid = 0;                                       \
+                if (_ctx) {                                                \
+                        (_finh)->uid = (_ctx)->uid;                        \
+                        (_finh)->gid = (_ctx)->gid;                        \
+                        (_finh)->pid = (_ctx)->pid;                        \
+                }                                                          \
+        } while (0)
+
+#define INIT_STUB(_stub, _data)                                            \
+        do {                                                               \
+                pthread_mutex_init (&(_stub)->mutex, NULL);                \
+                pthread_cond_init (&(_stub)->cond, NULL);                  \
+                (_stub)->fin = 0;                                          \
+                (_stub)->data = (_data);                                   \
+        } while (0)
+
+#define NOTIFY_STUB(_stub, _ret)                                           \
+        do {                                                               \
+                pthread_mutex_lock (&(_stub)->mutex);                      \
+                {                                                          \
+                        (_stub)->fin = 1;                                  \
+                        (_stub)->ret = _ret;                               \
+                        pthread_cond_broadcast (&(_stub)->cond);           \
+                }                                                          \
+                pthread_mutex_unlock (&(_stub)->mutex);                    \
+        } while (0)
+
+#define FETCH_STUB(_stub)                                                  \
+        do {                                                               \
+                pthread_mutex_lock (&(_stub)->mutex);                      \
+                {                                                          \
+                        while (!(_stub)->fin) {                            \
+                                pthread_cond_wait (&(_stub)->cond, &(_stub)->mutex);\
+                        }                                                  \
+                }                                                          \
+                pthread_mutex_unlock (&(_stub)->mutex);                    \
+                                                                           \
+                pthread_mutex_destroy (&(_stub)->mutex);                   \
+                pthread_cond_destroy (&(_stub)->cond);                     \
+        } while (0)
+
 
 #define FUSE_ENTRY_CREATE(this, priv, finh, state, fci, op)             \
                 do {                                                    \
@@ -343,6 +424,14 @@ typedef struct {
         loc_t                  resolve_loc;
 } fuse_resolve_t;
 
+typedef struct {
+        pthread_mutex_t  mutex;
+        pthread_cond_t   cond;
+        int              fin;
+        int              ret;
+        int              type;
+        void            *data;
+} fuse_stub_t;
 
 typedef struct {
         void             *pool;
@@ -387,6 +476,8 @@ typedef struct {
         uuid_t         gfid;
         uint32_t       io_flags;
         int32_t        fd_no;
+
+        fuse_stub_t *stub;
 } fuse_state_t;
 
 typedef struct {
@@ -401,10 +492,13 @@ GF_MUST_CHECK int32_t
 fuse_loc_fill (loc_t *loc, fuse_state_t *state, ino_t ino,
                ino_t par, const char *name);
 call_frame_t *get_call_frame_for_req (fuse_state_t *state);
-fuse_state_t *get_fuse_state (xlator_t *this, fuse_in_header_t *finh);
+fuse_state_t *get_fuse_state (xlator_t *this, char *path, fuse_in_header_t *finh);
 void free_fuse_state (fuse_state_t *state);
 void gf_fuse_stat2attr (struct iatt *st, struct fuse_attr *fa,
                         gf_boolean_t enable_ino32);
+void gf_fuse_stat2winstat (struct iatt *st, struct FUSE_STAT *stbuf);
+void gf_fuse_dirent2winstat (struct fuse_dirent *ent, struct FUSE_STAT *stbuf);
+
 void gf_fuse_fill_dirent (gf_dirent_t *entry, struct fuse_dirent *fde,
                           gf_boolean_t enable_ino32);
 uint64_t inode_to_fuse_nodeid (inode_t *inode);
@@ -416,6 +510,7 @@ int fuse_flip_xattr_ns (struct fuse_private *priv, char *okey, char **nkey);
 fuse_fd_ctx_t * __fuse_fd_ctx_check_n_create (xlator_t *this, fd_t *fd);
 fuse_fd_ctx_t * fuse_fd_ctx_check_n_create (xlator_t *this, fd_t *fd);
 
+int fuse_resolve_fd (fuse_state_t *state);
 int fuse_resolve_and_resume (fuse_state_t *state, fuse_resume_fn_t fn);
 int fuse_resolve_inode_init (fuse_state_t *state, fuse_resolve_t *resolve,
 			     ino_t ino);
@@ -430,6 +525,9 @@ int fuse_check_selinux_cap_xattr (fuse_private_t *priv, char *name);
 
 xlator_t *get_fuse_xlator();
 struct fuse_context *get_fuse_header_in(void);
+
+uint64_t get_fuse_op_unique();
+inode_t *fuse_inode_from_path (xlator_t * this, const char * path);
 
 struct mount_data {
         struct fuse_private *private;
