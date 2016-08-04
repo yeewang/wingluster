@@ -118,21 +118,20 @@ get_fuse_state (xlator_t *this, char *path, fuse_in_header_t *finh)
 	state->active_subvol = active_subvol;
 	state->itable = active_subvol->itable;
 
-#ifdef NEVER
-        if (path != NULL && finh->nodeid == 0) {
-                inode_t *inode = fuse_inode_from_path(state->this, path);
-                //        inode_resolve(state->itable, path);
-                finh->nodeid = inode_to_fuse_nodeid(inode);
+        if (path) {
+                if (strcmp(path, "/") == 0) {
+                        inode =  state->itable->root;
+                }
+                else {
+                        inode = inode_resolve(state->itable, path);
+                }
         }
-        else {
-                finh->nodeid = 0;
-        }
-#endif /* NEVER */
 
         state->pool = this->ctx->pool;
         state->finh = finh;
         state->this = this;
         state->stub = NULL;
+        state->finh->nodeid = inode_to_fuse_nodeid(inode);
 
         LOCK_INIT (&state->lock);
 

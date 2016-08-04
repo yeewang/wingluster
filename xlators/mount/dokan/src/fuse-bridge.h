@@ -251,18 +251,6 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                                                                            \
                         return -1;                                         \
                 }                                                          \
-                if (path) {                                                \
-                        inode_t *inode = NULL;                             \
-                        if (strcmp(path, "/") == 0) {                      \
-                                xlator_t *active_subvol = fuse_active_subvol (this); \
-                                if (active_subvol)                         \
-                                        inode =  active_subvol->itable->root; \
-                        }                                                  \
-                        else {                                             \
-                                inode = inode_resolve(state->itable, path);\
-                        }                                                  \
-                        state->finh->nodeid = inode_to_fuse_nodeid(inode); \
-                }                                                          \
         } while (0)
 
 
@@ -281,11 +269,12 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                 }                                                          \
         } while (0)
 
-#define INIT_STUB(_stub, _data)                                            \
+#define INIT_STUB(_stub, _type, _data)                                     \
         do {                                                               \
                 pthread_mutex_init (&(_stub)->mutex, NULL);                \
                 pthread_cond_init (&(_stub)->cond, NULL);                  \
                 (_stub)->fin = 0;                                          \
+                (_stub)->type = (_type);                                   \
                 (_stub)->data = (_data);                                   \
         } while (0)
 
@@ -294,13 +283,13 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                 pthread_mutex_lock (&(_stub)->mutex);                      \
                 {                                                          \
                         (_stub)->fin = 1;                                  \
-                        (_stub)->ret = _ret;                               \
+                        (_stub)->ret = (_ret);                             \
                         pthread_cond_broadcast (&(_stub)->cond);           \
                 }                                                          \
                 pthread_mutex_unlock (&(_stub)->mutex);                    \
         } while (0)
 
-#define FETCH_STUB(_stub)                                                  \
+#define DEINIT_STUB(_stub)                                                 \
         do {                                                               \
                 pthread_mutex_lock (&(_stub)->mutex);                      \
                 {                                                          \
