@@ -86,10 +86,9 @@ struct fuse_private {
 
         gf_boolean_t         strict_volfile_check;
 
-        fuse_handler_t     **fuse_ops;
-        fuse_handler_t     **fuse_ops0;
         pthread_mutex_t      fuse_dump_mutex;
         int                  fuse_dump_fd;
+
 
         glusterfs_graph_t   *next_graph;
         xlator_t            *active_subvol;
@@ -266,6 +265,11 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                         (_finh)->uid = (_ctx)->uid;                        \
                         (_finh)->gid = (_ctx)->gid;                        \
                         (_finh)->pid = (_ctx)->pid;                        \
+                }                                                          \
+                else {                                                     \
+                        (_finh)->uid = 0;                                  \
+                        (_finh)->gid = 0;                                  \
+                        (_finh)->pid = 0;                                  \
                 }                                                          \
         } while (0)
 
@@ -486,6 +490,7 @@ void free_fuse_state (fuse_state_t *state);
 void gf_fuse_stat2attr (struct iatt *st, struct fuse_attr *fa,
                         gf_boolean_t enable_ino32);
 void gf_fuse_stat2winstat (struct iatt *st, struct FUSE_STAT *stbuf);
+void gf_fuse_attr2winstat(struct fuse_attr *fa, struct FUSE_STAT *stbuf);
 void gf_fuse_dirent2winstat (struct fuse_dirent *ent, struct FUSE_STAT *stbuf);
 
 void gf_fuse_fill_dirent (gf_dirent_t *entry, struct fuse_dirent *fde,
@@ -516,7 +521,9 @@ xlator_t *get_fuse_xlator();
 struct fuse_context *get_fuse_header_in(void);
 
 uint64_t get_fuse_op_unique();
-inode_t *fuse_inode_from_path (xlator_t * this, const char * path);
+inode_t *fuse_inode_from_path (xlator_t * this, char * path);
+inode_t *fuse_inode_from_path1 (xlator_t *this, char *path,
+                                inode_table_t *itable);
 
 struct mount_data {
         struct fuse_private *private;

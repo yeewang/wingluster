@@ -120,10 +120,10 @@ get_fuse_state (xlator_t *this, char *path, fuse_in_header_t *finh)
 
         if (path) {
                 if (strcmp(path, "/") == 0) {
-                        inode =  state->itable->root;
+                        //inode =  state->itable->root;
                 }
                 else {
-                        inode = inode_resolve(state->itable, path);
+                        //inode = NULL; // inode_resolve(state->itable, path);
                 }
         }
 
@@ -131,7 +131,7 @@ get_fuse_state (xlator_t *this, char *path, fuse_in_header_t *finh)
         state->finh = finh;
         state->this = this;
         state->stub = NULL;
-        state->finh->nodeid = inode_to_fuse_nodeid(inode);
+        //state->finh->nodeid = inode_to_fuse_nodeid(inode);
 
         LOCK_INIT (&state->lock);
 
@@ -551,6 +551,30 @@ gf_fuse_stat2winstat(struct iatt *st, struct FUSE_STAT *stbuf)
 }
 
 void
+gf_fuse_attr2winstat(struct fuse_attr *fa, struct FUSE_STAT *stbuf)
+{
+        stbuf->st_dev = fa->rdev;
+        stbuf->st_ino = fa->ino;
+        stbuf->st_mode = fa->mode;
+        stbuf->st_nlink = fa->nlink;
+        stbuf->st_uid = fa->uid;
+        stbuf->st_gid = fa->gid;
+        stbuf->st_rdev = fa->rdev;
+        stbuf->st_size = fa->size;
+        stbuf->st_atim.tv_sec = fa->atime;
+        stbuf->st_atim.tv_nsec = fa->atimensec;
+        stbuf->st_mtim.tv_sec = fa->mtime;
+        stbuf->st_mtim.tv_nsec = fa->mtimensec;
+        stbuf->st_ctim.tv_sec = fa->ctime;
+        stbuf->st_ctim.tv_nsec = fa->ctimensec;
+
+        stbuf->st_blksize = fa->blksize;
+        stbuf->st_blocks = fa->blocks;
+        stbuf->st_birthtim.tv_sec = -1;
+        stbuf->st_birthtim.tv_nsec = -1;
+}
+
+void
 gf_fuse_fill_dirent (gf_dirent_t *entry, struct fuse_dirent *fde, gf_boolean_t enable_ino32)
 {
         if (enable_ino32)
@@ -723,7 +747,7 @@ uint64_t get_fuse_op_unique()
 }
 
 inode_t *
-fuse_inode_from_path (xlator_t * this, const char * path)
+fuse_inode_from_path1 (xlator_t *this, char *path, inode_table_t *itable)
 {
         if (strcmp(path, "/") == 0) {
                 xlator_t *active_subvol = fuse_active_subvol (this);
@@ -731,6 +755,91 @@ fuse_inode_from_path (xlator_t * this, const char * path)
                         return active_subvol->itable->root;
         }
 
-        return inode_resolve(this->itable, path);
+        return inode_resolve(itable, path);
+}
+
+inode_t*
+fuse_inode_from_path2 (xlator_t *this, char *path, inode_table_t *itable)
+{
+        int             ret             = -1;
+        struct iatt     iatt            = {0, };
+        inode_t        *linked_inode    = itable->root;
+        loc_t           loc             = {0, };
+        char           *bname           = NULL;
+        char           *save_ptr        = NULL;
+        uuid_t          gfid            = {0, };
+        char           *tmp_path        = NULL;
+
+
+        tmp_path = gf_strdup (path);
+        if (!tmp_path) {
+                goto out;
+        }
+
+        memset (gfid, 0, 16);
+        gfid[15] = 1;
+
+        gf_uuid_copy (loc.pargfid, gfid);
+        loc.parent = inode_ref (itable->root);
+
+        bname = strtok_r (tmp_path, "/",  &save_ptr);
+
+        /* sending a lookup on parent directory,
+         * Eg:  if  path is like /a/b/c/d/e/f/g/
+         * then we will send a lookup on a first and then b,c,d,etc
+         */
+
+        while (bname) {
+                linked_inode = NULL;
+                loc.inode = inode_grep (itable, loc.parent, bname);
+                if (loc.inode == NULL) {
+                        loc.inode = inode_new (itable);
+                        if (loc.inode == NULL) {
+                                ret = -ENOMEM;
+                                goto out;
+                        }
+                } else {
+                        /*
+                         * Inode is already populated in the inode table.
+                         * Which means we already looked up the inde and
+                         * linked with a dentry. So that we will skip
+                         * lookup on this entry, and proceed to next.
+                         */
+                        bname = strtok_r (NULL, "/",  &save_ptr);
+                        inode_unref (loc.parent);
+                        loc.parent = loc.inode;
+                        gf_uuid_copy (loc.pargfid, loc.inode->gfid);
+                        loc.inode = NULL;
+                        continue;
+                }
+
+                loc.name = bname;
+                ret = loc_path (&loc, bname);
+
+                ret = syncop_lookup (this, &loc, &iatt, NULL, NULL, NULL);
+                if (ret) {
+                        gf_log (this->name, GF_LOG_INFO,
+                                "Healing of path %s failed on subvolume %s for "
+                                "directory %s", path, this->name, bname);
+                        goto out;
+                }
+
+                linked_inode = inode_link (loc.inode, loc.parent, bname, &iatt);
+                if (!linked_inode)
+                        goto out;
+
+                loc_wipe (&loc);
+                gf_uuid_copy (loc.pargfid, linked_inode->gfid);
+                loc.inode = NULL;
+                loc.parent = linked_inode;
+
+                bname = strtok_r (NULL, "/",  &save_ptr);
+        }
+out:
+        inode_ref (linked_inode);
+        loc_wipe (&loc);
+        GF_FREE (tmp_path);
+
+        return linked_inode;
 }
 
