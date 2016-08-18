@@ -40,6 +40,9 @@ xlator_t *get_fuse_xlator()
         return gf_fuse_this_xl;
 }
 
+static int
+fuse_lookup_dir(xlator_t *this, inode_t *inode, struct fuse_context *ctx, gf_boolean_t block);
+
 #ifdef NEVER
 static void fuse_invalidate_inode(xlator_t *this, uint64_t fuse_ino);
 
@@ -482,8 +485,6 @@ fuse_root_lookup_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                       inode_t *inode, struct iatt *stat, dict_t *dict,
                       struct iatt *postparent)
 {
-        printf("oooooooooooooooooooooooooooo\n");
-
         fuse_attr_cbk (frame, cookie, this, op_ret, op_errno, stat, dict);
 
         return 0;
@@ -495,12 +496,10 @@ fuse_entry_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                 int32_t op_ret, int32_t op_errno,
                 inode_t *inode, struct iatt *buf, dict_t *xdata)
 {
-        printf (
-        "ffffffffffffffffffffffffffff fuse_entry_cbk\n");
-
         fuse_state_t          *state        = NULL;
         fuse_in_header_t      *finh         = NULL;
-        struct fuse_entry_out *feo          = NULL;
+        struct fuse_entry_out  feo          = {0, };
+        struct fuse_entry_out *feop         = &feo;
         fuse_private_t        *priv         = NULL;
         inode_t               *linked_inode = NULL;
         uint64_t               ctx_value    = LOOKUP_NOT_NEEDED;
@@ -511,7 +510,9 @@ fuse_entry_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
         finh = state->finh;
 
         stub = (fuse_stub_t *)state->stub;
-        feo = (struct fuse_entry_out *)stub->data;
+        if (stub != NULL) {
+                feop = (struct fuse_entry_out *)stub->data;
+        }
 
         if (op_ret == 0) {
                 if (__is_root_gfid (state->loc.inode->gfid))
@@ -545,7 +546,7 @@ fuse_entry_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                         state->loc.path, buf->ia_ino);
 
                 buf->ia_blksize = this->ctx->page_size;
-                gf_fuse_stat2attr (buf, &feo->attr, priv->enable_ino32);
+                gf_fuse_stat2attr (buf, &feop->attr, priv->enable_ino32);
 
                 if (!buf->ia_ino) {
                         gf_log ("glusterfs-fuse", GF_LOG_WARNING,
@@ -563,26 +564,26 @@ fuse_entry_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 
                 inode_lookup (linked_inode);
 
-                feo->nodeid = inode_to_fuse_nodeid (linked_inode);
+                feop->nodeid = inode_to_fuse_nodeid (linked_inode);
 
                 inode_unref (linked_inode);
 
-                feo->entry_valid =
+                feop->entry_valid =
                         calc_timeout_sec (priv->entry_timeout);
-                feo->entry_valid_nsec =
+                feop->entry_valid_nsec =
                         calc_timeout_nsec (priv->entry_timeout);
-                feo->attr_valid =
+                feop->attr_valid =
                         calc_timeout_sec (priv->attribute_timeout);
-                feo->attr_valid_nsec =
+                feop->attr_valid_nsec =
                         calc_timeout_nsec (priv->attribute_timeout);
 
 #if FUSE_KERNEL_MINOR_VERSION >= 9
                 priv->proto_minor >= 9 ?
-                send_fuse_obj (this, finh, &feo) :
-                send_fuse_data (this, finh, &feo,
+                send_fuse_obj (this, finh, feop) :
+                send_fuse_data (this, finh, feop,
                                 FUSE_COMPAT_ENTRY_OUT_SIZE);
 #else
-                send_fuse_obj (this, finh, &feo);
+                send_fuse_obj (this, finh, feop);
 #endif
 
                 NOTIFY_STUB(stub, 0);
@@ -594,11 +595,11 @@ fuse_entry_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                         strerror (op_errno));
 
 		if ((op_errno == ENOENT) && (priv->negative_timeout != 0)) {
-			feo->entry_valid =
+			feop->entry_valid =
 				calc_timeout_sec (priv->negative_timeout);
-			feo->entry_valid_nsec =
+			feop->entry_valid_nsec =
 				calc_timeout_nsec (priv->negative_timeout);
-			send_fuse_obj (this, finh, &feo);
+			send_fuse_obj (this, finh, feop);
 
                         NOTIFY_STUB(stub, ENOENT);
 		} else {
@@ -730,10 +731,6 @@ fuse_lookup_resume (fuse_state_t *state)
 }
 
 static int
-fuse_getattr(const char *path, struct FUSE_STAT *stbuf);
-
-
-static int
 fuse_lookup_subdir (ino_t parent, char *path, struct fuse_entry_out *feo)
 {
         fuse_private_t *priv     = NULL;
@@ -745,13 +742,14 @@ fuse_lookup_subdir (ino_t parent, char *path, struct fuse_entry_out *feo)
         inode_t        *inode    = NULL;
         int             ret      = -1;
 
-        if (parent == 1) {
+        if (parent == 0) {
                 INIT_FUSE_HEADER(finh, FUSE_GETATTR, ctx);
                 FILL_STATE (this, path, finh, state);
                 state->stub = &stub;
                 state->gfid[15] = 1;
+                printf ("lllllllllllllllllll fuse_lookup_subdir0 %p,%s\n", parent, path);
 
-                ret = fuse_loc_fill (&state->loc, state, 1, 1, path);
+                ret = fuse_loc_fill (&state->loc, state, 1, parent, path[0] == '/' ? NULL : path);
                 if (ret < 0) {
                         gf_log ("glusterfs-fuse", GF_LOG_WARNING,
                                 "LOOKUP on / (fuse_loc_fill() failed)");
@@ -759,6 +757,9 @@ fuse_lookup_subdir (ino_t parent, char *path, struct fuse_entry_out *feo)
                         free_fuse_state (state);
                         return -1;
                 }
+
+                printf ("lllllllllllllllllll fuse_lookup_subdir01 %p,%s,%s,%p\n",
+                        parent, state->loc.path, state->loc.name, state->loc.inode);
 
                 fuse_gfid_set (state);
 
@@ -770,11 +771,13 @@ fuse_lookup_subdir (ino_t parent, char *path, struct fuse_entry_out *feo)
                 DEINIT_STUB(&stub);
 
                 printf (
-                "vvvvvvvvvvvvvvvvvvvvvvv fuse_lookup_subdir2 %p,%s\n", parent, path);
+                "lllllllllllllllllll fuse_lookup_subdir2 %p,%s, %p\n", parent, path, feo->nodeid);
 
                 return stub.ret;
         }
-        else if (parent == -1) {
+
+        if (parent == -1) {
+                printf ("vvvvvvvvvvvvvvvvvvvvvvv fuse_lookup_subdir4 %p,%s\n", parent, path);
                 priv = this->private;
                 //inode = fuse_inode_from_path1 (this, path, priv->active_subvol->itable);
                 if (inode == NULL) {
@@ -787,55 +790,87 @@ fuse_lookup_subdir (ino_t parent, char *path, struct fuse_entry_out *feo)
                                 return -1;
                         }
 
-                        //fuse_lookup_subdir (1, "/", feo);
-                        parent = 1; // feo->nodeid;
+                        parent = 1;
                         bname = strtok_r (tmp_path, "/",  &save_ptr);
                         while (bname != NULL) {
-                                if (fuse_lookup_subdir (parent, bname, feo) != 0) {
-                                        goto out;
+                                ret = fuse_lookup_subdir (parent, bname, feo);
+                                if (ret != 0) {
+                                        break;
                                 }
 
                                 parent = feo->nodeid;
                                 bname = strtok_r (NULL, "/",  &save_ptr);
                         }
-
+out:
                         GF_FREE (tmp_path);
 
-                        return 0;
+                        return ret;
                 }
                 else {
                         parent = inode_to_fuse_nodeid(inode);
                 }
-                printf (
-                "vvvvvvvvvvvvvvvvvvvvvvv fuse_lookup_subdir3 %p,%s\n", parent, path);
-
-                INIT_FUSE_HEADER(finh, FUSE_LOOKUP, ctx);
-                FILL_STATE (this, path, finh, state);
-                state->stub = &stub;
-
-                INIT_STUB(&stub, FUSE_LOOKUP, feo);
-
-                fuse_resolve_entry_init (state, &state->resolve,
-                        parent, path);
-
-                fuse_resolve_and_resume (state, fuse_lookup_resume);
-
-                DEINIT_STUB(&stub);
         }
 
-out:
+        printf (
+        "vvvvvvvvvvvvvvvvvvvvvvv fuse_lookup_subdir3 %p,%s\n", parent, path);
+
+        INIT_FUSE_HEADER(finh, FUSE_LOOKUP, ctx);
+        FILL_STATE (this, path, finh, state);
+        state->stub = &stub;
+
+        INIT_STUB(&stub, FUSE_LOOKUP, feo);
+
+        if (parent == 1) {
+                //state->gfid[15] = 1;
+        }
+        /*
+
+        ret = fuse_loc_fill (&state->loc, state, 0, parent, basename(path));
+        if (ret < 0) {
+                gf_log ("glusterfs-fuse", GF_LOG_WARNING,
+                        "LOOKUP on / (fuse_loc_fill() failed)");
+                send_fuse_err (this, finh, ENOENT);
+                free_fuse_state (state);
+                return -1;
+        }
+
+        fuse_gfid_set (state);
+*/
+        printf ("vvvvvvvvvvvvvvvvvvvvvvv fuse_lookup_subdir02 %p,%s,%s,%p\n",
+                parent, state->loc.path, state->loc.name, state->loc.inode);
+
+        fuse_resolve_entry_init (state, &state->resolve,
+                parent, path);
+
+        fuse_resolve_and_resume (state, fuse_lookup_resume);
+
+        DEINIT_STUB(&stub);
+        printf ("vvvvvvvvvvvvvvvvvvvvvvv fuse_lookup_subdir05 %p,%s,%s,%p\n",
+                parent, state->loc.path, state->loc.name, state->loc.inode);
+
         return stub.ret;
 }
 
-// static void
-// fuse_lookup (xlator_t *this, fuse_in_header_t *finh, void *msg)
-static int
-fuse_lookup (char *path, struct fuse_entry_out *feo)
+static void
+fuse_lookup (xlator_t *this, ino_t parent, char *path)
 {
         printf (
-        "vvvvvvvvvvvvvvvvvvvvvvv fuse_lookup %s\n", path);
+                "zzzzzzzzzzzzzzzzzzzzzzzzzzzzz fuse_lookup %p, %p,%s\n", this, parent, path);
 
-        return fuse_lookup_subdir(-1, path, feo);
+        fuse_state_t   *state    = NULL;
+        fuse_in_header_t *finh   = NULL;
+        struct fuse_context *ctx = get_fuse_header_in();
+        int             ret      = -1;
+        struct fuse_entry_out feo;
+
+        INIT_FUSE_HEADER(finh, FUSE_LOOKUP, ctx);
+        FILL_STATE (this, path, finh, state);
+        state->stub = NULL;
+
+        fuse_resolve_entry_init (state, &state->resolve,
+                parent, path);
+
+        fuse_resolve_and_resume (state, fuse_lookup_resume);
 }
 
 static void
@@ -978,13 +1013,16 @@ fuse_getattr(const char *path, struct FUSE_STAT *stbuf)
         int32_t ret = -1;
 
         INIT_FUSE_HEADER(finh, FUSE_GETATTR, ctx);
+
         FILL_STATE (this, path, finh, state);
+        finh->nodeid = inode_to_fuse_nodeid(
+                fuse_inode_from_path1(this, path, state->itable));
         state->stub = &stub;
 
-        if (strcmp(path, "/") == 0) {
+        if (finh->nodeid == 1) {
                 state->gfid[15] = 1;
 
-                ret = fuse_loc_fill (&state->loc, state, 1, 0, NULL);
+                ret = fuse_loc_fill (&state->loc, state, finh->nodeid, 0, NULL);
                 if (ret < 0) {
                         gf_log ("glusterfs-fuse", GF_LOG_WARNING,
                                 "GETATTR on / (fuse_loc_fill() failed)");
@@ -1003,20 +1041,6 @@ fuse_getattr(const char *path, struct FUSE_STAT *stbuf)
                 DEINIT_STUB(&stub);
 
                 return stub.ret;
-        }
-
-        if (ctx == NULL || 1) {
-
-                printf("kkkkkkkkkkkkkkkkkkkkkkkk->fuse_getattr:%s\n", path);
-                struct fuse_entry_out feo;
-
-                ret = fuse_lookup(path, &feo);
-                if (ret == 0) {
-                        gf_fuse_attr2winstat(&feo.attr, stbuf);
-                }
-
-                // get nodeid
-                return ret;
         }
 
         INIT_STUB(&stub, FUSE_GETATTR, stbuf);
@@ -2559,9 +2583,6 @@ fuse_open_resume (fuse_state_t *state)
 static int
 dokan_open (const char *path, struct fuse_file_info *fi)
 {
-        gf_log ("glusterfs-fuse", GF_LOG_TRACE,
-                "dokan_open => %s", path);
-
         xlator_t *this = get_fuse_xlator();
         fuse_in_header_t *finh = NULL;
         fuse_state_t *state = NULL;
@@ -2569,17 +2590,15 @@ dokan_open (const char *path, struct fuse_file_info *fi)
         fuse_stub_t stub;
         struct fuse_entry_out feo;
 
-        int ret = fuse_lookup(path, &feo);
-        if (ret != 0)
-                return ret;
-
         INIT_FUSE_HEADER(finh, FUSE_OPEN, ctx);
+        finh->nodeid = inode_to_fuse_nodeid(
+                fuse_inode_from_path1(this, path, state->itable));
         FILL_STATE (this, path, finh, state);
         state->stub = &stub;
 
         INIT_STUB(&stub, FUSE_OPEN, NULL);
 
-        fuse_resolve_inode_init (state, &state->resolve, feo.nodeid);
+        fuse_resolve_inode_init (state, &state->resolve, state->finh->nodeid);
 
         state->flags = fi->flags;
 
@@ -2591,8 +2610,16 @@ dokan_open (const char *path, struct fuse_file_info *fi)
                 fi->fh = fd_ref((fd_t *)stub.data);
         }
 
+        printf("ppppppppppppp dokan_open %s, %p, ret=%d\n", path, fi->fh, stub.ret);
+
         return stub.ret;
 }
+
+typedef struct {
+        void *buf;
+        int buf_len;
+        int size;
+} fuse_stub_readv_t;
 
 static int
 fuse_readv_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
@@ -2603,10 +2630,14 @@ fuse_readv_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
         fuse_state_t *state = NULL;
         fuse_in_header_t *finh = NULL;
         struct fuse_out_header fouh = {0, };
-        struct iovec *iov_out = NULL;
+        fuse_stub_t  *stub = NULL;
+        fuse_stub_readv_t *buf = NULL;
+        int len = 0;
 
         state = frame->root->state;
         finh = state->finh;
+        stub = state->stub;
+        buf = (fuse_stub_readv_t *)stub->data;
 
         fuse_log_eh_fop(this, state, frame, op_ret, op_errno);
 
@@ -2616,21 +2647,20 @@ fuse_readv_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                         frame->root->unique,
                         op_ret, state->size, state->off, stbuf->ia_size);
 
-                iov_out = GF_CALLOC (count + 1, sizeof (*iov_out),
-                                     gf_fuse_mt_iovec);
-                if (iov_out) {
-                        fouh.error = 0;
-                        iov_out[0].iov_base = &fouh;
+                for (int i = 0; i < count && len <= buf->buf_len; i++) {
+                        memcpy((uint8_t *)buf->buf + len,
+                                vector[i].iov_base, vector[i].iov_len);
+                        len += vector[i].iov_len;
+                }
 
-                        memcpy (iov_out + 1, vector, count * sizeof (*iov_out));
-                        data_t *data = bin_to_data (iov_out, count * sizeof (*iov_out));
-                        if (data != NULL)
-                                dict_set (xdata, "buf", data);
-
-                        // GF_FREE (iov_out);
-
-                } else
+                if (len > buf->buf_len) {
                         send_fuse_err (this, finh, ENOMEM);
+                        NOTIFY_STUB(stub, ENOMEM);
+                }
+                else {
+                        buf->size = len;
+                        NOTIFY_STUB(stub, 0);
+                }
         } else {
                 gf_log ("glusterfs-fuse", GF_LOG_WARNING,
                         "%"PRIu64": READ => %d gfid=%s fd=%p (%s)",
@@ -2640,6 +2670,7 @@ fuse_readv_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                         state->fd, strerror (op_errno));
 
                 send_fuse_err (this, finh, op_errno);
+                NOTIFY_STUB(stub, op_errno);
         }
 
         free_fuse_state (state);
@@ -2662,59 +2693,41 @@ fuse_readv_resume (fuse_state_t *state)
 static int dokan_read(const char *path, char *buf, size_t size, off_t offset,
 		    struct fuse_file_info *fi)
 {
-        gf_log ("glusterfs-fuse", GF_LOG_TRACE,
-                "dokan_read => %s, size=%"GF_PRI_SIZET",offset=%"PRId64,
-                path, size, offset);
-        __asm__("int $3");
+        printf("ppppppppppppp dokan_read %s, %p\n", path, fi->fh);
 
-        xlator_t *this = get_fuse_xlator();
+        xlator_t                *this  = get_fuse_xlator();
+        fuse_in_header_t        *finh  = NULL;
+        fuse_state_t            *state = NULL;
+        struct fuse_context     *ctx   = get_fuse_header_in();
+        fuse_stub_t              stub;
+        fuse_stub_readv_t        readv_buf = {buf, size, 0};
+        fd_t                    *fd    = NULL;
+        int                      len   = 0;
 
-        fuse_in_header_t *finh = NULL;
-        fuse_state_t *state = NULL;
-        struct fuse_context *ctx = get_fuse_header_in();
+        INIT_FUSE_HEADER(finh, FUSE_READ, ctx);
+        FILL_STATE (this, path, finh, state);
+        state->stub = &stub;
 
-        const size_t msg0_size = sizeof (*finh) + 128;
-        finh = GF_CALLOC (1, msg0_size, gf_fuse_mt_iov_base);
-
-        finh->len = msg0_size;
-        finh->opcode = FUSE_OPEN;
-        finh->unique = 0;
-        finh->nodeid = 1;
-        finh->uid = ctx->uid;
-        finh->gid = ctx->gid;
-        finh->pid = ctx->pid;
-        strncpy(finh + sizeof(sizeof (*finh)), path, 128);
-
-        fd_t         *fd = NULL;
-
-        GET_STATE (this, finh, state);
+        INIT_STUB(&stub, FUSE_READ, &readv_buf);
 
         fd = FH_TO_FD (fi->fh);
         state->fd = fd;
-
-        fuse_resolve_fd_init (state, &state->resolve, fd);
-
         state->lk_owner = fi->lock_owner;
         state->size = size;
         state->off = offset;
         state->io_flags = fi->flags;
+        state->flags = fi->flags; // ?
         state->xdata = dict_new();
+
+        fuse_resolve_fd_init (state, &state->resolve, fd);
 
         fuse_resolve_and_resume (state, fuse_readv_resume);
 
+        DEINIT_STUB(&stub);
 
-
-        struct iovec *iov_out = NULL;
-        data_t *data = dict_get (state->xdata, "buf");
-        iov_out = (struct iovec *) data_to_bin(data);
-        if (iov_out == NULL) {
-
+        if (stub.ret == 0) {
+                len = readv_buf.size;
         }
-
-        int len = (iov_out + 1)->iov_len;
-        memcpy(buf, (iov_out + 1)->iov_base, len);
-        dict_unref(state->xdata);
-        GF_FREE(data);
 
         return len;
 }
@@ -3137,8 +3150,12 @@ fuse_opendir (const char *path, struct fuse_file_info *fi)
 
         DEINIT_STUB(&stub);
 
-        if (stub.ret == 0)
+        if (stub.ret == 0) {
                 fi->fh = fd_ref((fd_t *)stub.data);
+
+                fuse_lookup_dir(this, inode, ctx, _gf_false);
+                sleep(5);
+        }
 
         return stub.ret;
 }
@@ -3178,12 +3195,11 @@ d_type_from_stat (struct iatt *buf)
 
 typedef struct {
         void *buf;
-        fuse_fill_dir_t filler;
-        off_t offset;
+        size_t size;
 } fuse_stub_readdir_t;
 
 static int
-fuse_readdir_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
+fuse_lookup_dir_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                   int32_t op_ret, int32_t op_errno, gf_dirent_t *entries,
                   dict_t *xdata)
 {
@@ -3196,13 +3212,11 @@ fuse_readdir_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
         struct fuse_dirent *fde = NULL;
         fuse_private_t *priv = NULL;
         fuse_stub_t *stub = NULL;
-        fuse_stub_readdir_t *rd_stub = NULL;
 
         state = frame->root->state;
         finh  = state->finh;
         priv = state->this->private;
         stub = state->stub;
-        rd_stub = (fuse_stub_readdir_t *)stub->data;
 
         fuse_log_eh_fop(this, state, frame, op_ret, op_errno);
 
@@ -3212,7 +3226,7 @@ fuse_readdir_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                         strerror (op_errno));
 
                 send_fuse_err (this, finh, op_errno);
-                NOTIFY_STUB(stub, -1);
+                // NOTIFY_STUB(stub, -1);
                 goto out;
         }
 
@@ -3234,7 +3248,7 @@ fuse_readdir_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 
         if (max_size == 0) {
                 send_fuse_data (this, finh, 0, 0);
-                NOTIFY_STUB(stub, -1);
+                // NOTIFY_STUB(stub, -1);
                 goto out;
         }
 
@@ -3244,7 +3258,7 @@ fuse_readdir_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                         "%"PRIu64": READDIR => -1 (%s)", frame->root->unique,
                         strerror (ENOMEM));
                 send_fuse_err (this, finh, ENOMEM);
-                NOTIFY_STUB(stub, -1);
+                // NOTIFY_STUB(stub, -1);
                 goto out;
         }
 
@@ -3254,18 +3268,16 @@ fuse_readdir_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                 gf_fuse_fill_dirent (entry, fde, priv->enable_ino32);
                 size += FUSE_DIRENT_SIZE (fde);
 
-                struct FUSE_STAT st;
-                memset(&st, 0, sizeof(st));
-                gf_fuse_dirent2winstat(fde, &st);
-		if (rd_stub->filler(rd_stub->buf, fde->name, &st, 0))
-			break;
+                if (strcmp(fde->name, ".") != 0 &&
+                    strcmp(fde->name, "..") != 0)
+                        fuse_lookup(this, finh->nodeid, fde->name);
 
                 if (size == max_size)
                         break;
         }
 
         send_fuse_data (this, finh, buf, size);
-        NOTIFY_STUB(stub, 0);
+        // NOTIFY_STUB(stub, 0);
 
         /* TODO: */
         /* gf_link_inodes_from_dirent (this, state->fd->inode, entries); */
@@ -3279,62 +3291,49 @@ out:
 }
 
 void
-fuse_readdir_resume (fuse_state_t *state)
+fuse_lookup_dir_resume (fuse_state_t *state)
 {
         gf_log ("glusterfs-fuse", GF_LOG_TRACE,
                 "%"PRIu64": READDIR (%p, size=%"GF_PRI_SIZET", offset=%"PRId64")",
                 state->finh->unique, state->fd, state->size, state->off);
 
-        FUSE_FOP (state, fuse_readdir_cbk, GF_FOP_READDIR,
+        FUSE_FOP (state, fuse_lookup_dir_cbk, GF_FOP_READDIR,
                   readdir, state->fd, state->size, state->off, state->xdata);
 }
 
-// static void
-// fuse_readdir (xlator_t *this, fuse_in_header_t *finh, void *msg)
 static int
-fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-       off_t offset, struct fuse_file_info *fi)
+fuse_lookup_dir (xlator_t *this, inode_t *inode, struct fuse_context *ctx, gf_boolean_t block)
 {
-        gf_log ("glusterfs-fuse", GF_LOG_TRACE,
-                "fuse_readdir => %s", path);
-
-        xlator_t *this = get_fuse_xlator();
         fuse_stub_t stub;
-        fuse_stub_readdir_t rd_stub;
         fuse_in_header_t *finh = NULL;
         fuse_state_t *state = NULL;
-        struct fuse_context *ctx = get_fuse_header_in();
-        inode_t *inode = NULL;
         fd_t *fd = NULL;
 
         INIT_FUSE_HEADER(finh, FUSE_READDIR, ctx);
-        FILL_STATE (this, path, finh, state);
+        FILL_STATE (this, NULL, finh, state);
         state->stub = &stub;
 
-        inode = fuse_inode_from_path1(this, path, state->itable);
-
         fd = fd_lookup (inode, state->finh->pid);
+        finh->nodeid = inode_to_fuse_nodeid(inode);
 
         state->size = 64 * 1024 * 1024; /* assume bufsize is 64MB */
-        state->off = offset;
+        state->off = 0;
         state->fd = fd;
 
-        rd_stub.buf = buf;
-        rd_stub.filler = filler;
-        rd_stub.offset = offset;
-
-        INIT_STUB(&stub, FUSE_READDIR, &rd_stub);
+        //INIT_STUB(&stub, FUSE_READDIR, &rd_stub);
+        stub.fin = 0;
+        stub.type = FUSE_READDIR;
+        stub.data = NULL;
 
         fuse_resolve_fd_init (state, &state->resolve, fd);
 
-        fuse_resolve_and_resume (state, fuse_readdir_resume);
+        fuse_resolve_and_resume (state, fuse_lookup_dir_resume);
 
-        DEINIT_STUB(&stub);
+        // DEINIT_STUB(&stub);
 
         return stub.ret;
 }
 
-#if FUSE_KERNEL_MINOR_VERSION >= 20
 static int
 fuse_readdirp_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 		   int32_t op_ret, int32_t op_errno, gf_dirent_t *entries,
@@ -3348,11 +3347,16 @@ fuse_readdirp_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 	gf_dirent_t  *entry = NULL;
 	struct fuse_direntplus *fde = NULL;
 	struct fuse_entry_out *feo = NULL;
-	fuse_private_t         *priv   = NULL;
+	fuse_private_t *priv = NULL;
+        fuse_stub_t *stub = NULL;
+        fuse_stub_readdir_t *rd_stub = NULL;
+        int                  count = 0;
 
 	state = frame->root->state;
 	finh  = state->finh;
 	priv = this->private;
+        stub = state->stub;
+        rd_stub = (fuse_stub_readdir_t *)stub->data;
 
 	if (op_ret < 0) {
 		gf_log ("glusterfs-fuse", GF_LOG_WARNING,
@@ -3360,6 +3364,7 @@ fuse_readdirp_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 			strerror (op_errno));
 
 		send_fuse_err (this, finh, op_errno);
+                NOTIFY_STUB(stub, op_errno);
 		goto out;
 	}
 
@@ -3369,7 +3374,7 @@ fuse_readdirp_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 
 	list_for_each_entry (entry, &entries->list, list) {
                 size_t fdes = FUSE_DIRENT_ALIGN (FUSE_NAME_OFFSET_DIRENTPLUS +
-                                                 strlen (entry->d_name));
+                                                 strlen (entry->d_name) + 1);
                 max_size += fdes;
 
                 if (max_size > state->size) {
@@ -3381,6 +3386,7 @@ fuse_readdirp_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 
 	if (max_size == 0) {
 		send_fuse_data (this, finh, 0, 0);
+                NOTIFY_STUB(stub, 0);
 		goto out;
 	}
 
@@ -3390,6 +3396,7 @@ fuse_readdirp_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 			"%"PRIu64": READDIRP => -1 (%s)", frame->root->unique,
 			strerror (ENOMEM));
 		send_fuse_err (this, finh, ENOMEM);
+                NOTIFY_STUB(stub, ENOMEM);
 		goto out;
 	}
 
@@ -3409,7 +3416,10 @@ fuse_readdirp_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 		fde->dirent.type = entry->d_type;
 		fde->dirent.namelen = strlen (entry->d_name);
 		strncpy (fde->dirent.name, entry->d_name, fde->dirent.namelen);
-		size += FUSE_DIRENTPLUS_SIZE (fde);
+                fde->dirent.name[fde->dirent.namelen] = '\0';
+		size += FUSE_DIRENT_ALIGN (FUSE_NAME_OFFSET_DIRENTPLUS +
+                                           fde->dirent.namelen + 1);
+                printf("mmmmmmmmmmmmm fuse_readdirp_cbk:%s, %p\n", entry->d_name, entry->inode);
 
 		if (!entry->inode)
 			goto next_entry;
@@ -3422,6 +3432,7 @@ fuse_readdirp_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 		if (!linked_inode)
 			goto next_entry;
 
+printf("mmmmmmmmmmmmm1 fuse_readdirp_cbk:%s\n", entry->d_name);
                 if ((strcmp(entry->d_name, ".") != 0) &&
                     (strcmp(entry->d_name, "..") != 0)) {
                         inode_lookup (linked_inode);
@@ -3442,15 +3453,19 @@ fuse_readdirp_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 			calc_timeout_nsec (priv->attribute_timeout);
 
 next_entry:
+
                 if (size == max_size)
                         break;
 	}
 
 	send_fuse_data (this, finh, buf, size);
+
+        rd_stub->buf = buf;
+        rd_stub->size = max_size;
+        NOTIFY_STUB(stub, 0);
 out:
 	free_fuse_state (state);
 	STACK_DESTROY (frame->root);
-	GF_FREE (buf);
 	return 0;
 
 }
@@ -3467,25 +3482,69 @@ fuse_readdirp_resume (fuse_state_t *state)
 }
 
 
-static void
-fuse_readdirp (xlator_t *this, fuse_in_header_t *finh, void *msg)
+// static void
+// fuse_readdirp (xlator_t *this, fuse_in_header_t *finh, void *msg)
+static int
+fuse_readdirp(const char *path, void *buf, fuse_fill_dir_t filler,
+       off_t offset, struct fuse_file_info *fi)
 {
-	struct fuse_read_in *fri = msg;
+        xlator_t *this = get_fuse_xlator();
+        fuse_stub_t stub;
+        fuse_stub_readdir_t rd_stub;
+        fuse_in_header_t *finh = NULL;
+        fuse_state_t *state = NULL;
+        struct fuse_context *ctx = get_fuse_header_in();
+        inode_t *inode = NULL;
+        fd_t *fd = NULL;
 
-	fuse_state_t *state = NULL;
-	fd_t         *fd = NULL;
+        INIT_FUSE_HEADER(finh, FUSE_READDIRPLUS, ctx);
+        FILL_STATE (this, path, finh, state);
+        state->stub = &stub;
 
-	GET_STATE (this, finh, state);
-	state->size = fri->size;
-	state->off = fri->offset;
-	fd = FH_TO_FD (fri->fh);
-	state->fd = fd;
+        inode = fuse_inode_from_path1(this, path, state->itable);
+
+        fd = fd_lookup (inode, state->finh->pid);
+
+        state->size = 64 * 1024 * 1024; /* assume bufsize is 64MB */
+        state->off = offset;
+        state->fd = fd;
+
+        rd_stub.buf = NULL;
+
+        INIT_STUB(&stub, FUSE_READDIRPLUS, &rd_stub);
 
 	fuse_resolve_fd_init (state, &state->resolve, fd);
 
 	fuse_resolve_and_resume (state, fuse_readdirp_resume);
+
+        DEINIT_STUB(&stub);
+
+        if (stub.ret == 0 && rd_stub.size > 0 && filler) {
+                size_t size = 0;
+        	struct fuse_direntplus *fde = NULL;
+        	struct fuse_entry_out *feo = NULL;
+                struct FUSE_STAT stbuf;
+
+                while (size < rd_stub.size) {
+        		fde = (struct fuse_direntplus *)(rd_stub.buf + size);
+        		feo = &fde->entry_out;
+
+                        memset(&stbuf, 0, sizeof(struct FUSE_STAT));
+                        gf_fuse_dirent2winstat(&fde->dirent, &stbuf);
+printf("uuuuuuuuuuuuuuuuuuuuu:%s\n", fde->dirent.name);
+                        if (filler(buf, fde->dirent.name, &stbuf, 0)) {
+                                // break;
+                        }
+
+                        size += FUSE_DIRENT_ALIGN (FUSE_NAME_OFFSET_DIRENTPLUS +
+                                           fde->dirent.namelen + 1);
+                }
+
+        	GF_FREE (rd_stub.buf);
+        }
+
+        return stub.ret;
 }
-#endif
 
 #if FUSE_KERNEL_MINOR_VERSION >= 19
 #ifdef FALLOC_FL_KEEP_SIZE
@@ -4661,6 +4720,9 @@ fuse_first_lookup_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
         stub = frame->local;
 
         if (op_ret == 0) {
+                inode_lookup (inode);
+                inode_set_need_lookup (inode, this);
+
                 gf_log (this->name, GF_LOG_TRACE,
                         "first lookup on root succeeded.");
         } else {
@@ -5716,7 +5778,7 @@ struct fuse_operations dokan_operations = {
         .listxattr      = fuse_listxattr,
         .removexattr    = fuse_removexattr,
         .opendir        = fuse_opendir,
-        .readdir	= fuse_readdir,
+        .readdir	= fuse_readdirp,
         .releasedir     = fuse_releasedir,
         .fsyncdir       = NULL,
         .init           = fuse_init,

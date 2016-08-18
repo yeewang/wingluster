@@ -98,7 +98,6 @@ get_fuse_state (xlator_t *this, char *path, fuse_in_header_t *finh)
         fuse_state_t   *state         = NULL;
 	xlator_t       *active_subvol = NULL;
         fuse_private_t *priv          = NULL;
-        inode_t        *inode         = NULL;
 
         state = (void *)GF_CALLOC (1, sizeof (*state),
                                    gf_fuse_mt_fuse_state_t);
@@ -117,21 +116,10 @@ get_fuse_state (xlator_t *this, char *path, fuse_in_header_t *finh)
 
 	state->active_subvol = active_subvol;
 	state->itable = active_subvol->itable;
-
-        if (path) {
-                if (strcmp(path, "/") == 0) {
-                        //inode =  state->itable->root;
-                }
-                else {
-                        //inode = NULL; // inode_resolve(state->itable, path);
-                }
-        }
-
         state->pool = this->ctx->pool;
         state->finh = finh;
         state->this = this;
         state->stub = NULL;
-        //state->finh->nodeid = inode_to_fuse_nodeid(inode);
 
         LOCK_INIT (&state->lock);
 
@@ -429,6 +417,9 @@ fuse_loc_fill (loc_t *loc, fuse_state_t *state, ino_t ino,
                 inode = loc->inode;
                 if (!inode && parent) {
                         inode = inode_grep (parent->table, parent, name);
+                        if (inode) {
+                                gf_uuid_copy (loc->gfid, inode->gfid);
+                        }
                         loc->inode = inode;
                 }
 

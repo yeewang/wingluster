@@ -270,6 +270,8 @@ fuse_resolve_parent_simple (fuse_state_t *state)
                 if ((loc->inode == NULL)
                     && __is_root_gfid (parent->gfid)) {
                         /* non decisive result - entry missing */
+
+                        // windows break hear!!!!!!!!!!!
                         return -1;
                 }
 

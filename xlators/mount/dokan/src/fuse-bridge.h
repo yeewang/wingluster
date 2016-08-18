@@ -284,13 +284,15 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
 
 #define NOTIFY_STUB(_stub, _ret)                                           \
         do {                                                               \
-                pthread_mutex_lock (&(_stub)->mutex);                      \
-                {                                                          \
-                        (_stub)->fin = 1;                                  \
-                        (_stub)->ret = (_ret);                             \
-                        pthread_cond_broadcast (&(_stub)->cond);           \
+                if (_stub != NULL) {                                       \
+                        pthread_mutex_lock (&(_stub)->mutex);              \
+                        {                                                  \
+                                (_stub)->fin = 1;                          \
+                                (_stub)->ret = (_ret);                     \
+                                pthread_cond_broadcast (&(_stub)->cond);   \
+                        }                                                  \
+                        pthread_mutex_unlock (&(_stub)->mutex);            \
                 }                                                          \
-                pthread_mutex_unlock (&(_stub)->mutex);                    \
         } while (0)
 
 #define DEINIT_STUB(_stub)                                                 \
