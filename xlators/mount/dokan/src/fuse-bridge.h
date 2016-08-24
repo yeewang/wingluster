@@ -1,12 +1,4 @@
-/*
-   Copyright (c) 2006-2012 Red Hat, Inc. <http://www.redhat.com>
-   This file is part of GlusterFS.
 
-   This file is licensed to you under your choice of the GNU Lesser
-   General Public License, version 3 or any later version (LGPLv3 or
-   later), or the GNU General Public License, version 2 (GPLv2), in all
-   cases as published by the Free Software Foundation.
-*/
 #ifndef _GF_FUSE_BRIDGE_H_
 #define _GF_FUSE_BRIDGE_H_
 
@@ -58,8 +50,8 @@
 #define MAX_FUSE_PROC_DELAY 1
 
 typedef struct fuse_in_header fuse_in_header_t;
-typedef void (fuse_handler_t) (xlator_t *this, fuse_in_header_t *finh,
-                               void *msg);
+typedef struct dokan_msg dokan_msg_t;
+typedef void (fuse_handler_t) (xlator_t *this, dokan_msg_t* msg);
 
 struct fuse_private {
         uint32_t             proto_minor;
@@ -72,7 +64,6 @@ struct fuse_private {
         char                 fuse_thread_started;
 
         uint32_t             direct_io_mode;
-        size_t              *msg0_len_p;
 
         double               entry_timeout;
         double               negative_timeout;
@@ -84,11 +75,17 @@ struct fuse_private {
 
         char                 init_recvd;
 
+        pthread_cond_t       msg_cond;
+        pthread_mutex_t      msg_mutex;
+        char                 msg_recvd;
+        struct list_head     msg_list;
+
         gf_boolean_t         strict_volfile_check;
 
+        fuse_handler_t     **fuse_ops;
+        fuse_handler_t     **fuse_ops0;
         pthread_mutex_t      fuse_dump_mutex;
         int                  fuse_dump_fd;
-
 
         glusterfs_graph_t   *next_graph;
         xlator_t            *active_subvol;
@@ -218,9 +215,9 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
         (((_errno == ENOENT) || (_errno == ESTALE))?    \
          GF_LOG_DEBUG)
 
-#define GET_STATE(this, finh, state)                                       \
+#define FILL_STATE(this, finh, path, state)                                \
         do {                                                               \
-                state = get_fuse_state (this, NULL, finh);                 \
+                state = get_fuse_state (this, finh);                       \
                 if (!state) {                                              \
                         gf_log ("glusterfs-fuse",                          \
                                 GF_LOG_ERROR,                              \
@@ -231,31 +228,19 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                         send_fuse_err (this, finh, ENOMEM);                \
                         GF_FREE (finh);                                    \
                                                                            \
-                        return -1;                                         \
+                        return;                                            \
                 }                                                          \
-        } while (0)
-
-#define FILL_STATE(this, path, finh, state)                                \
-        do {                                                               \
-                state = get_fuse_state (this, path, finh);                 \
-                if (!state) {                                              \
-                        gf_log ("glusterfs-fuse",                          \
-                                GF_LOG_ERROR,                              \
-                                "FUSE message unique %"PRIu64" opcode %d:" \
-                                " state allocation failed",                \
-                                finh->unique, finh->opcode);               \
                                                                            \
-                        send_fuse_err (this, finh, ENOMEM);                \
-                        GF_FREE (finh);                                    \
-                                                                           \
-                        return -1;                                         \
-                }                                                          \
+                if (path) {                                                \
+                        finh->nodeid = inode_to_fuse_nodeid(               \
+                                fuse_inode_from_path(this, path, state->itable)); \
+                }                                      \
         } while (0)
 
 
 #define INIT_FUSE_HEADER(_finh, _opcode, _ctx)                             \
         do {                                                               \
-                const size_t msg0_size = sizeof (*finh);                   \
+                const size_t msg0_size = sizeof (*_finh);                  \
                 (_finh) = GF_CALLOC (1, msg0_size, gf_fuse_mt_iov_base);   \
                 (_finh)->len = msg0_size;                                  \
                 (_finh)->opcode = _opcode;                                 \
@@ -419,14 +404,17 @@ typedef struct {
         loc_t                  resolve_loc;
 } fuse_resolve_t;
 
-typedef struct {
-        pthread_mutex_t  mutex;
+typedef struct dokan_msg {
+        struct list_head list;
         pthread_cond_t   cond;
+        pthread_mutex_t  mutex;
+        int              type;
+        int              size;
         int              fin;
         int              ret;
-        int              type;
-        void            *data;
-} fuse_stub_t;
+        fuse_in_header_t* finh;
+        uint8_t          args[0];
+} dokan_msg_t;
 
 typedef struct {
         void             *pool;
@@ -472,7 +460,7 @@ typedef struct {
         uint32_t       io_flags;
         int32_t        fd_no;
 
-        fuse_stub_t *stub;
+        dokan_msg_t    *stub;
 } fuse_state_t;
 
 typedef struct {
@@ -487,7 +475,7 @@ GF_MUST_CHECK int32_t
 fuse_loc_fill (loc_t *loc, fuse_state_t *state, ino_t ino,
                ino_t par, const char *name);
 call_frame_t *get_call_frame_for_req (fuse_state_t *state);
-fuse_state_t *get_fuse_state (xlator_t *this, char *path, fuse_in_header_t *finh);
+fuse_state_t *get_fuse_state (xlator_t *this, fuse_in_header_t *finh);
 void free_fuse_state (fuse_state_t *state);
 void gf_fuse_stat2attr (struct iatt *st, struct fuse_attr *fa,
                         gf_boolean_t enable_ino32);
@@ -500,7 +488,7 @@ void gf_fuse_fill_dirent (gf_dirent_t *entry, struct fuse_dirent *fde,
 uint64_t inode_to_fuse_nodeid (inode_t *inode);
 xlator_t *fuse_active_subvol (xlator_t *fuse);
 inode_t *fuse_ino_to_inode (uint64_t ino, xlator_t *fuse);
-int send_fuse_err (xlator_t *this, fuse_in_header_t *finh, int error);
+int send_fuse_err (xlator_t* this, dokan_msg_t *msg, int error);
 int fuse_gfid_set (fuse_state_t *state);
 int fuse_flip_xattr_ns (struct fuse_private *priv, char *okey, char **nkey);
 fuse_fd_ctx_t * __fuse_fd_ctx_check_n_create (xlator_t *this, fd_t *fd);
@@ -523,8 +511,7 @@ xlator_t *get_fuse_xlator();
 struct fuse_context *get_fuse_header_in(void);
 
 uint64_t get_fuse_op_unique();
-inode_t *fuse_inode_from_path (xlator_t * this, char * path);
-inode_t *fuse_inode_from_path1 (xlator_t *this, char *path,
+inode_t *fuse_inode_from_path (xlator_t *this, char *path,
                                 inode_table_t *itable);
 
 struct mount_data {
@@ -535,5 +522,8 @@ struct mount_data {
         char *mnt_param;
         int status_fd;
 };
+
+void dokan_req (dokan_msg_t *msg);
+int dokan_result (dokan_msg_t* msg);
 
 #endif /* _GF_FUSE_BRIDGE_H_ */

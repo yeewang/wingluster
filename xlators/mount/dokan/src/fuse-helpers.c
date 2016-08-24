@@ -93,7 +93,7 @@ free_fuse_state (fuse_state_t *state)
 
 
 fuse_state_t *
-get_fuse_state (xlator_t *this, char *path, fuse_in_header_t *finh)
+get_fuse_state (xlator_t *this, fuse_in_header_t *finh)
 {
         fuse_state_t   *state         = NULL;
 	xlator_t       *active_subvol = NULL;
@@ -738,12 +738,16 @@ uint64_t get_fuse_op_unique()
 }
 
 inode_t *
-fuse_inode_from_path1 (xlator_t *this, char *path, inode_table_t *itable)
+fuse_inode_from_path (xlator_t *this, char *path, inode_table_t *itable)
 {
+        inode_t *inode = NULL;
+
         if (strcmp(path, "/") == 0) {
                 xlator_t *active_subvol = fuse_active_subvol (this);
-                if (active_subvol)
-                        return active_subvol->itable->root;
+                if (active_subvol) {
+                        inode = active_subvol->itable->root;
+                        return inode_ref(inode);
+                }
         }
 
         return inode_resolve(itable, path);
