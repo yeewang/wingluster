@@ -140,7 +140,26 @@ typedef struct
         size_t size;
 } dokan_listxattr_t;
 
+typedef struct
+{
+        uint64_t nodeid;
+} dokan_lookup_dir_t;
 
+typedef struct dokan_msg dokan_msg_t;
+typedef struct
+{
+        dokan_msg_t* msg;
+} dokan_autorelease_t, dokan_waitmsg_t;
+
+typedef struct
+{
+        xlator_t* this;
+        ino_t parent;
+        char* path;
+} dokan_lookup_t;
+
+int
+dokan_lookup_dir(uint64_t nodeid);
 
 #endif /* _GF_DOKAN_INFO_H_ */
 
