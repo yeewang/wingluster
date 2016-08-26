@@ -239,13 +239,13 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                 }                                                              \
         } while (0)
 
-#define INIT_FUSE_HEADER(_finh, _opcode, _ctx)                                 \
+#define INIT_FUSE_HEADER(_finh, _unique, _opcode, _ctx)                        \
         do {                                                                   \
                 const size_t msg0_size = sizeof(*_finh);                       \
                 (_finh) = GF_CALLOC(1, msg0_size, gf_fuse_mt_iov_base);        \
                 (_finh)->len = msg0_size;                                      \
                 (_finh)->opcode = _opcode;                                     \
-                (_finh)->unique = get_fuse_op_unique();                        \
+                (_finh)->unique = _unique;                                     \
                 (_finh)->nodeid = 0;                                           \
                 if (_ctx) {                                                    \
                         (_finh)->uid = (_ctx)->uid;                            \
@@ -406,6 +406,7 @@ typedef struct dokan_msg {
         pthread_cond_t cond;
         pthread_mutex_t mutex;
         int type;
+        uint64_t unique;
         gf_boolean_t autorelease;
         int fin;
         int ret;
