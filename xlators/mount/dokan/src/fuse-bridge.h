@@ -216,7 +216,7 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
         (((_errno == ENOENT) || (_errno == ESTALE))?    \
          GF_LOG_DEBUG)
 
-#define FILL_STATE(msg, this, finh, path,state)                                \
+#define FILL_STATE(msg, this, finh, path, state)                                \
         do {                                                                   \
                 state = get_fuse_state(this, finh);                            \
                 if (!state) {                                                  \
@@ -234,6 +234,12 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                 if (path) {                                                    \
                         inode_t *inode =                                       \
                             fuse_inode_from_path(this, path, state->itable);   \
+                        if (inode == NULL) {                                   \
+                                dokan_send_err(this, msg, ENOENT);             \
+                                GF_FREE(finh);                                 \
+                                                                               \
+                                return;                                        \
+                        }                                                      \
                         finh->nodeid = inode_to_fuse_nodeid(inode);            \
                         inode_unref(inode);                                    \
                 }                                                              \

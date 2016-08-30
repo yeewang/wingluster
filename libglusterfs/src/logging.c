@@ -2253,7 +2253,7 @@ log:
                         fflush (stderr);
                 }
 
-#ifdef GF_LINUX_HOST_OS
+#if defined(GF_LINUX_HOST_OS) && defined(GF_CYGWIN_HOST_OS)
                 /* We want only serious log in 'syslog', not our debug
                    and trace logs */
                 if (ctx->log.gf_log_syslog && level &&

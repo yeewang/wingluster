@@ -23,8 +23,9 @@ enum gf_fuse_mem_types_ {
         gf_fuse_mt_graph_switch_args_t,
 	gf_fuse_mt_gids_t,
         gf_fuse_mt_invalidate_node_t,
-        gf_fuse_mt_dokan_msg_t,
+        gf_fuse_mt_dokan_msg_t_000000,
         gf_fuse_mt_end
 };
 #endif
 
+#define gf_fuse_mt_dokan_msg_t gf_fuse_mt_char

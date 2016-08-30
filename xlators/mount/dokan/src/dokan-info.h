@@ -75,9 +75,16 @@ typedef struct
 
 typedef struct
 {
-        const char* path;
+        char* path;
         struct fuse_file_info* fi;
 } dokan_open_t, dokan_flush_t, dokan_release_t, dokan_opendir_t, dokan_releasedir_t;
+
+typedef struct
+{
+        const char *path;
+        mode_t mode;
+        struct fuse_file_info * fi;
+} dokan_create_t;
 
 typedef struct
 {
@@ -155,7 +162,7 @@ typedef struct
 {
         xlator_t* this;
         ino_t parent;
-        char* path;
+        const char* path;
 } dokan_lookup_t;
 
 int
