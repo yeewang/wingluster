@@ -753,6 +753,38 @@ fuse_inode_from_path (xlator_t *this, char *path, inode_table_t *itable)
         return inode_resolve(itable, path);
 }
 
+
+int split_pathname(char *pathname, char **path, char **basename)
+{
+        char *p;
+
+        *path = gf_strdup(pathname);
+        if (*path == NULL)
+                goto fail_out;
+
+        p = strrchr(*path, '/');
+        *basename = gf_strdup(p + 1);
+        if (*basename == NULL)
+                goto fail_out;
+
+        if (p > *path) {
+                *p = '\0';
+        }
+        else {
+                (*path)[1] = '\0';
+        }
+
+        return 0;
+
+fail_out:
+        if (*path)
+                GF_FREE(*path);
+        if (*basename)
+                GF_FREE(*basename);
+
+        return -1;
+}
+
 inode_t*
 fuse_inode_from_path2 (xlator_t *this, char *path, inode_table_t *itable)
 {

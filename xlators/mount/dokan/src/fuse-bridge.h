@@ -516,6 +516,8 @@ struct fuse_context* get_fuse_header_in(void);
 uint64_t get_fuse_op_unique();
 inode_t* fuse_inode_from_path(xlator_t* this, char* path,
                               inode_table_t* itable);
+int split_pathname(char *pathname, char **path, char **basename);
+
 
 struct mount_data
 {

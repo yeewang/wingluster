@@ -580,15 +580,15 @@ fuse_lookup(xlator_t* this, dokan_msg_t* msg)
         finh->nodeid = args->parent;
 
         fuse_resolve_entry_init(state, &state->resolve,
-                finh->nodeid, args->path);
+                finh->nodeid, args->basename);
 
-        GF_FREE(args->path);
+        GF_FREE(args->basename);
 
         fuse_resolve_and_resume(state, fuse_lookup_resume);
 }
 
 static void
-dokan_lookup(xlator_t* this, ino_t parent, char* path)
+dokan_lookup(xlator_t* this, ino_t parent, char* bname)
 {
         dokan_msg_t* msg = NULL;
         dokan_lookup_t* params = NULL;
@@ -602,7 +602,7 @@ dokan_lookup(xlator_t* this, ino_t parent, char* path)
         params = (dokan_lookup_t*)msg->args;
         params->this = this;
         params->parent = parent;
-        params->path = gf_strdup(path);
+        params->basename = gf_strdup(bname);
 
         dokan_send_req(msg);
 }
@@ -720,7 +720,7 @@ fuse_getattr_resume(fuse_state_t* state)
         }
 
         if (!IA_ISDIR(state->loc.inode->ia_type)) {
-                state->fd = fd_lookup(state->loc.inode, 0 /*state->finh->pid*/);
+                state->fd = fd_lookup(state->loc.inode, state->finh->pid);
         }
 
         if (!state->fd) {
@@ -746,6 +746,9 @@ fuse_getattr(xlator_t* this, dokan_msg_t* msg)
         fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
         int32_t ret = -1;
+
+        gf_log("glusterfs-fuse", GF_LOG_DEBUG, "fuse_getattr %s",
+                args->path);
 
         FILL_STATE(msg, this, finh, args->path, state);
 
@@ -789,6 +792,28 @@ dokan_getattr(const char* path, struct FUSE_STAT* stbuf)
         params = (dokan_getattr_t*)msg->args;
         params->path = path;
         params->stbuf = stbuf;
+        params->fi = NULL;
+
+        dokan_send_req(msg);
+
+        return dokan_get_result_and_cleanup(msg);
+}
+
+static int
+dokan_fgetattr(const char *path, struct FUSE_STAT *stbuf,
+        struct fuse_file_info *fi)
+{
+        dokan_msg_t* msg = NULL;
+        dokan_getattr_t* params = NULL;
+
+        msg = dokan_get_req(FUSE_GETATTR, sizeof(dokan_getattr_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (dokan_getattr_t*)msg->args;
+        params->path = path;
+        params->stbuf = stbuf;
+        params->fi = fi;
 
         dokan_send_req(msg);
 
@@ -1099,68 +1124,38 @@ fuse_setattr_resume(fuse_state_t* state)
 }
 
 static void
-fuse_setattr(xlator_t* this, fuse_in_header_t* finh, void* msg)
+fuse_setattr(xlator_t* this, dokan_msg_t* msg)
 {
-        struct fuse_setattr_in* fsi = msg;
-
-#if FUSE_KERNEL_MINOR_VERSION >= 9
+        dokan_setattr_t *args = (dokan_setattr_t *)msg->args;
+        fuse_in_header_t* finh = msg->finh;
         fuse_private_t* priv = NULL;
-#endif
         fuse_state_t* state = NULL;
 
-        FILL_STATE(msg, this, finh, NULL, state);
+        FILL_STATE(msg, this, finh, args->path, state);
 
         state->stub = msg;
 
-        if (fsi->valid & FATTR_FH &&
-            !(fsi->valid & (FATTR_ATIME | FATTR_MTIME))) {
-                /* We need no loc if kernel sent us an fd and
-                 * we are not fiddling with times */
-                state->fd = FH_TO_FD(fsi->fh);
-                fuse_resolve_fd_init(state, &state->resolve, state->fd);
-        } else {
-                fuse_resolve_inode_init(state, &state->resolve,
-                                        1 /*finh->nodeid*/);
+        fuse_resolve_inode_init(state, &state->resolve,
+                                finh->nodeid);
+
+        priv = this->private;
+
+        state->valid = args->valid;
+
+        if (args->valid & (FATTR_ATIME | FATTR_MTIME)) {
+                state->attr.ia_atime = args->ts[0].tv_sec;
+                state->attr.ia_mtime = args->ts[1].tv_sec;
+                state->attr.ia_atime_nsec = args->ts[0].tv_nsec;
+                state->attr.ia_mtime_nsec = args->ts[1].tv_nsec;
         }
 
-/*
- * This is just stub code demonstrating how to retrieve
- * lock_owner in setattr, according to the FUSE proto.
- * We do not make use of ATM. Its purpose is supporting
- * mandatory locking, but getting that right is further
- * down the road. Cf.
- *
- * http://thread.gmane.org/gmane.comp.file-systems.fuse.devel/
- * 4962/focus=4982
- *
- * http://git.kernel.org/?p=linux/kernel/git/torvalds/
- * linux-2.6.git;a=commit;h=v2.6.23-5896-gf333211
- */
-#if FUSE_KERNEL_MINOR_VERSION >= 9
-        priv = this->private;
-        if (priv->proto_minor >= 9 && fsi->valid & FATTR_LOCKOWNER)
-                state->lk_owner = fsi->lock_owner;
-#endif
+        if (args->valid & (FATTR_UID | FATTR_GID)) {
+                state->attr.ia_uid = args->uid;
+                state->attr.ia_gid = args->gid;
+        }
 
-        state->valid = fsi->valid;
-
-        if ((fsi->valid & (FATTR_MASK)) != FATTR_SIZE) {
-                if (fsi->valid & FATTR_SIZE) {
-                        state->off = fsi->size;
-                        state->truncate_needed = _gf_true;
-                }
-
-                state->attr.ia_size = fsi->size;
-                state->attr.ia_atime = fsi->atime;
-                state->attr.ia_mtime = fsi->mtime;
-                state->attr.ia_atime_nsec = fsi->atimensec;
-                state->attr.ia_mtime_nsec = fsi->mtimensec;
-
-                state->attr.ia_prot = ia_prot_from_st_mode(fsi->mode);
-                state->attr.ia_uid = fsi->uid;
-                state->attr.ia_gid = fsi->gid;
-        } else {
-                state->off = fsi->size;
+        if (args->valid & (FATTR_MODE)) {
+                state->attr.ia_prot = ia_prot_from_st_mode(args->mode);
         }
 
         fuse_resolve_and_resume(state, fuse_setattr_resume);
@@ -1508,20 +1503,22 @@ fuse_mknod(xlator_t* this, dokan_msg_t* msg)
         struct fuse_mknod_in fmi;
         fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
+        fuse_private_t* priv = NULL;
         int32_t ret = -1;
+        char* name = NULL;
+        char *path = NULL;
+
+        if (split_pathname(args->path, &path, &name) != 0) {
+                dokan_send_err(this, msg, ENOMEM);
+                return;
+        }
 
         finh = msg->finh;
 
         fmi.mode = args->mode;
         fmi.rdev = args->rdev;
 
-        char* name = (char*)(args->path);
-
-#if FUSE_KERNEL_MINOR_VERSION >= 12
-        fuse_private_t* priv = NULL;
-#endif
-
-        FILL_STATE(msg, this, finh, args->path, state);
+        FILL_STATE(msg, this, finh, path, state);
 
         state->stub = msg;
 
@@ -1532,10 +1529,11 @@ fuse_mknod(xlator_t* this, dokan_msg_t* msg)
         state->mode = args->mode;
         state->rdev = args->rdev;
 
-#if FUSE_KERNEL_MINOR_VERSION >= 12
         priv = this->private;
         FUSE_ENTRY_CREATE(this, priv, finh, state, (&fmi), "MKNOD");
-#endif
+
+        GF_FREE(name);
+        GF_FREE(path);
 
         fuse_resolve_and_resume(state, fuse_mknod_resume);
 
@@ -1605,19 +1603,13 @@ fuse_mkdir(xlator_t* this, dokan_msg_t* msg)
         fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
         char* name = NULL;
-        char *path = gf_strdup(args->path);
-        char *p = NULL;
+        char *path = NULL;
         int ret = -1;
         fuse_private_t* priv = NULL;
 
-        p = strrchr(path, '/');
-        name = gf_strdup(p + 1);
-
-        if (p > path) {
-                *p = '\0';
-        }
-        else {
-                path[1] = '\0';
+        if (split_pathname(args->path, &path, &name) != 0) {
+                dokan_send_err(this, msg, ENOMEM);
+                return;
         }
 
         fmi.mode = args->mode;
@@ -1689,16 +1681,25 @@ fuse_unlink(xlator_t* this, dokan_msg_t* msg)
         dokan_unlink_t* args = (dokan_unlink_t*)msg->args;
         fuse_in_header_t* finh = NULL;
         fuse_state_t* state = NULL;
+        char* name = NULL;
+        char *path = NULL;
+        char *p = NULL;
+
+        if (split_pathname(args->path, &path, &name) != 0) {
+                dokan_send_err(this, msg, ENOMEM);
+                return;
+        }
 
         finh = msg->finh;
 
-        char* name = args->path;
-
-        FILL_STATE(msg, this, finh, args->path, state);
+        FILL_STATE(msg, this, finh, path, state);
 
         state->stub = msg;
 
         fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, name);
+
+        GF_FREE(name);
+        GF_FREE(path);
 
         fuse_resolve_and_resume(state, fuse_unlink_resume);
 
@@ -1750,16 +1751,25 @@ fuse_rmdir(xlator_t* this, dokan_msg_t* msg)
         dokan_rmdir_t* args = (dokan_rmdir_t*)msg->args;
         fuse_in_header_t* finh = NULL;
         fuse_state_t* state = NULL;
+        char* name = NULL;
+        char *path = NULL;
+        int ret = -1;
+
+        if (split_pathname(args->path, &path, &name) != 0) {
+                dokan_send_err(this, msg, ENOMEM);
+                return;
+        }
 
         finh = msg->finh;
 
-        char* name = (char*)(args->path);
-
-        FILL_STATE(msg, this, finh, args->path, state);
+        FILL_STATE(msg, this, finh, path, state);
 
         state->stub = msg;
 
         fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, name);
+
+        GF_FREE(name);
+        GF_FREE(path);
 
         fuse_resolve_and_resume(state, fuse_rmdir_resume);
 
@@ -1825,13 +1835,20 @@ fuse_symlink(xlator_t* this, dokan_msg_t* msg)
         dokan_symlink_t* args = (dokan_symlink_t*)msg->args;
         fuse_in_header_t* finh = NULL;
         fuse_state_t* state = NULL;
+        char* name = NULL;
+        char *path = NULL;
+        int ret = -1;
+
+        if (split_pathname(args->from, &path, &name) != 0) {
+                dokan_send_err(this, msg, ENOMEM);
+                return;
+        }
 
         finh = msg->finh;
 
-        char* name = args->from;
         char* linkname = args->to;
 
-        FILL_STATE(msg, this, finh, args->from, state);
+        FILL_STATE(msg, this, finh, path, state);
 
         state->stub = msg;
 
@@ -1842,6 +1859,9 @@ fuse_symlink(xlator_t* this, dokan_msg_t* msg)
         state->name = gf_strdup(linkname);
 
         fuse_resolve_and_resume(state, fuse_symlink_resume);
+
+        GF_FREE(path);
+        GF_FREE(name);
 
         return;
 }
@@ -1980,22 +2000,50 @@ fuse_rename(xlator_t* this, dokan_msg_t* msg)
         fuse_in_header_t* finh = NULL;
         fuse_state_t* state = NULL;
         struct fuse_rename_in fri;
+        char* name = NULL;
+        char *path = NULL;
+        char* newname = NULL;
+        char *newpath = NULL;
+        inode_t *inode = NULL;
+        int ret = -1;
+
+        if (split_pathname(args->from, &path, &name) != 0) {
+                dokan_send_err(this, msg, ENOMEM);
+                return;
+        }
+
+        if (split_pathname(args->from, &newpath, &newname) != 0) {
+                dokan_send_err(this, msg, ENOMEM);
+                goto out;
+        }
 
         finh = msg->finh;
 
-        char* oldname = args->from;
-        char* newname = args->to;
-        fri.newdir = finh->nodeid;
+        FILL_STATE(msg, this, finh, path, state);
 
-        FILL_STATE(msg, this, finh, args->from, state);
+        inode = fuse_inode_from_path(this, newpath, state->itable);
+        if (inode == NULL) {
+                dokan_send_err(this, msg, ENOENT);
+                GF_FREE(finh);
+                return;
+        }
+
+        fri.newdir = inode_to_fuse_nodeid(inode);
+        inode_unref(inode);
 
         state->stub = msg;
 
-        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, oldname);
+        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, name);
 
         fuse_resolve_entry_init(state, &state->resolve2, fri.newdir, newname);
 
         fuse_resolve_and_resume(state, fuse_rename_resume);
+
+out:
+        GF_FREE(name);
+        GF_FREE(path);
+        GF_FREE(newname);
+        GF_FREE(newpath);
 
         return;
 }
@@ -2052,28 +2100,55 @@ static void
 fuse_link(xlator_t* this, dokan_msg_t* msg)
 {
         dokan_link_t* args = (dokan_link_t*)msg->args;
-        struct fuse_link_in fli;
         fuse_in_header_t* finh = NULL;
         fuse_state_t* state = NULL;
         inode_t* inode = NULL;
+        char *oldname = NULL;
+        char *oldpath = NULL;
+        char *newname = NULL;
+        char *newpath = NULL;
+        uint64_t newnodeid;
+        int ret = -1;
+
+        if (split_pathname(args->from, &oldpath, &oldname) != 0) {
+                dokan_send_err(this, msg, ENOMEM);
+                goto out;
+        }
+
+
+        if (split_pathname(args->to, &newpath, &newname) != 0) {
+                dokan_send_err(this, msg, ENOMEM);
+                goto out;
+        }
 
         finh = msg->finh;
 
-        FILL_STATE(msg, this, finh, args->from, state);
+        FILL_STATE(msg, this, finh, oldpath, state);
 
         state->stub = msg;
 
         inode = fuse_inode_from_path(this, args->to, state->itable);
-        fli.oldnodeid = inode_to_fuse_nodeid(inode);
+        if (inode == NULL) {
+                dokan_send_err(this, msg, ENOENT);
+                goto out;
+        }
+
+        newnodeid = inode_to_fuse_nodeid(inode);
         inode_unref(inode);
 
         fuse_resolve_entry_init(state, &state->resolve2, finh->nodeid,
-                                args->from);
+                                oldname);
 
-        fuse_resolve_entry_init(state, &state->resolve, fli.oldnodeid,
-                                args->to);
+        fuse_resolve_entry_init(state, &state->resolve, newnodeid,
+                                newname);
 
         fuse_resolve_and_resume(state, fuse_link_resume);
+
+out:
+        GF_FREE(oldpath);
+        GF_FREE(oldname);
+        GF_FREE(newpath);
+        GF_FREE(newname);
 
         return;
 }
@@ -2270,18 +2345,12 @@ fuse_create(xlator_t* this, dokan_msg_t* msg)
         fuse_private_t* priv = NULL;
         fuse_state_t* state = NULL;
         char* name = NULL;
-        char *path = gf_strdup(args->path);
-        char *p = NULL;
+        char *path = NULL;
         int ret = -1;
 
-        p = strrchr(path, '/');
-        name = gf_strdup(p + 1);
-
-        if (p > path) {
-                *p = '\0';
-        }
-        else {
-                path[1] = '\0';
+        if (split_pathname(args->path, &path, &name) != 0) {
+                dokan_send_err(this, msg, ENOMEM);
+                goto out;
         }
 
         FILL_STATE(msg, this, finh, path, state);
@@ -2292,9 +2361,6 @@ fuse_create(xlator_t* this, dokan_msg_t* msg)
 
         fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, name);
 
-        GF_FREE(name);
-        GF_FREE(path);
-
         state->mode = args->mode;
         state->flags = args->fi->flags;
 
@@ -2302,6 +2368,9 @@ fuse_create(xlator_t* this, dokan_msg_t* msg)
         FUSE_ENTRY_CREATE(this, priv, finh, state, (&fci), "CREATE");
 
         fuse_resolve_and_resume(state, fuse_create_resume);
+out:
+        GF_FREE(name);
+        GF_FREE(path);
 
         return;
 }
@@ -3375,8 +3444,6 @@ dokan_readdirp(const char* path, void* buf, fuse_fill_dir_t filler,
         return ret;
 }
 
-#if FUSE_KERNEL_MINOR_VERSION >= 19
-#ifdef FALLOC_FL_KEEP_SIZE
 static int
 fuse_fallocate_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                    int32_t op_ret, int32_t op_errno, struct iatt* prebuf,
@@ -3404,23 +3471,75 @@ fuse_fallocate_resume(fuse_state_t* state)
 }
 
 static void
-fuse_fallocate(xlator_t* this, fuse_in_header_t* finh, void* msg)
+fuse_fallocate(xlator_t* this, dokan_msg_t* msg)
 {
-        struct fuse_fallocate_in* ffi = msg;
+        dokan_ftruncate_t *args = (dokan_ftruncate_t *)msg->args;
+        fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
 
-        FILL_STATE(msg, this, finh, NULL, state);
-        state->stub = msg;
-        state->off = ffi->offset;
-        state->size = ffi->length;
-        state->flags = ffi->mode;
-        state->fd = FH_TO_FD(ffi->fh);
+        if (args->fi) {
+                FILL_STATE(msg, this, finh, NULL, state);
 
-        fuse_resolve_fd_init(state, &state->resolve, state->fd);
+                state->stub = msg;
+                state->off = 0;
+                state->size = args->size;
+                state->flags = args->fi->flags;
+                state->fd = FH_TO_FD(args->fi->fh);
+
+                fuse_resolve_fd_init(state, &state->resolve, state->fd);
+        }
+        else {
+                FILL_STATE(msg, this, finh, args->path, state);
+
+                state->stub = msg;
+                state->off = 0;
+                state->size = args->size;
+
+                fuse_resolve_inode_init(state, &state->resolve, finh->nodeid);
+        }
+
         fuse_resolve_and_resume(state, fuse_fallocate_resume);
 }
-#endif /* FALLOC_FL_KEEP_SIZE */
-#endif /* FUSE minor version >= 19 */
+
+static int
+dokan_truncate(const char* path, off_t size)
+{
+        dokan_msg_t* msg = NULL;
+        dokan_ftruncate_t* params = NULL;
+
+        msg = dokan_get_req(FUSE_FALLOCATE, sizeof(dokan_ftruncate_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (dokan_ftruncate_t*)msg->args;
+        params->path = path;
+        params->size = size;
+        params->fi = NULL;
+
+        dokan_send_req(msg);
+
+        return dokan_get_result_and_cleanup(msg);
+}
+
+static int
+dokan_ftruncate(const char *path, FUSE_OFF_T size, struct fuse_file_info *fi)
+{
+        dokan_msg_t* msg = NULL;
+        dokan_ftruncate_t* params = NULL;
+
+        msg = dokan_get_req(FUSE_FALLOCATE, sizeof(dokan_ftruncate_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (dokan_ftruncate_t*)msg->args;
+        params->path = path;
+        params->size = size;
+        params->fi = fi;
+
+        dokan_send_req(msg);
+
+        return dokan_get_result_and_cleanup(msg);
+}
 
 static void
 fuse_releasedir(xlator_t* this, dokan_msg_t* msg)
@@ -4527,6 +4646,14 @@ dokan_init(struct fuse_conn_info* conn)
                FUSE_KERNEL_VERSION, FUSE_KERNEL_MINOR_VERSION,
                conn->proto_major, conn->proto_minor);
         return NULL;
+}
+
+static void
+dokan_destroy(void *data)
+{
+        gf_log("glusterfs-fuse", GF_LOG_INFO,
+               "FUSE exited with arg: %p:",
+               data);
 }
 
 static void
@@ -5812,27 +5939,78 @@ mem_acct_init(xlator_t* this)
 static int
 dokan_chmod(const char* path, mode_t mode)
 {
-        __asm__("int $3");
-        gf_log("glusterfs-fuse", GF_LOG_TRACE, "fuse_chmod => %s", path);
+        dokan_msg_t* msg = NULL;
+        dokan_setattr_t* params = NULL;
 
-        return 0;
+        msg = dokan_get_req(FUSE_SETATTR, sizeof(dokan_setattr_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (dokan_setattr_t*)msg->args;
+        params->path = path;
+        params->valid = (FATTR_MODE);
+        params->mode = mode;
+
+        dokan_send_req(msg);
+
+        return dokan_get_result_and_cleanup(msg);
 }
 
 static int
 dokan_chown(const char* path, uid_t uid, gid_t gid)
 {
-        gf_log("glusterfs-fuse", GF_LOG_TRACE, "fuse_chown => %s", path);
+        dokan_msg_t* msg = NULL;
+        dokan_setattr_t* params = NULL;
 
-        __asm__("int $3");
-        return 0;
+        msg = dokan_get_req(FUSE_SETATTR, sizeof(dokan_setattr_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (dokan_setattr_t*)msg->args;
+        params->path = path;
+        params->valid = (FATTR_UID | FATTR_GID);
+        params->uid = uid;
+        params->gid = gid;
+
+        dokan_send_req(msg);
+
+        return dokan_get_result_and_cleanup(msg);
 }
 
 static int
-dokan_truncate(const char* path, off_t size)
+dokan_utimens(const char *path, const struct timespec ts[2])
 {
-        gf_log("glusterfs-fuse", GF_LOG_TRACE, "fuse_truncate => %s", path);
-        __asm__("int $3");
-        return 0;
+        dokan_msg_t* msg = NULL;
+        dokan_setattr_t* params = NULL;
+        struct timespec now;
+
+        msg = dokan_get_req(FUSE_SETATTR, sizeof(dokan_setattr_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (dokan_setattr_t*)msg->args;
+        params->path = path;
+        params->valid = (FATTR_ATIME | FATTR_MTIME);
+
+        clock_gettime(CLOCK_REALTIME, &now);
+
+        if (ts[0].tv_nsec == UTIME_NOW) {
+                params->ts[0] = now;
+        }
+        else {
+                params->ts[0] = ts[0];
+        }
+
+        if (ts[1].tv_nsec == UTIME_NOW) {
+                params->ts[1] = now;
+        }
+        else {
+                params->ts[1] = ts[1];
+        }
+
+        dokan_send_req(msg);
+
+        return dokan_get_result_and_cleanup(msg);
 }
 
 static fuse_handler_t* fuse_std_ops[FUSE_OP_HIGH] = {
@@ -5915,13 +6093,13 @@ struct fuse_operations dokan_operations = {
         .releasedir     = dokan_releasedir,
         .fsyncdir       = NULL,
         .init           = dokan_init,
-        .destroy        = NULL,
+        .destroy        = dokan_destroy,
         .access         = dokan_access,
         .create         = dokan_create,
-        .ftruncate      = NULL,
-        .fgetattr       = NULL,
+        .ftruncate      = dokan_ftruncate,
+        .fgetattr       = dokan_fgetattr,
         .lock           = NULL,
-        .utimens        = NULL,
+        .utimens        = dokan_utimens,
         .bmap           = NULL,
 
 #ifdef _WIN32

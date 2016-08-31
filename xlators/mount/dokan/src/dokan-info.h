@@ -5,6 +5,7 @@ typedef struct
 {
         const char* path;
         struct FUSE_STAT* stbuf;
+        struct fuse_file_info* fi;
 } dokan_getattr_t;
 
 typedef struct
@@ -162,8 +163,35 @@ typedef struct
 {
         xlator_t* this;
         ino_t parent;
-        const char* path;
+        const char* basename;
 } dokan_lookup_t;
+
+typedef struct
+{
+        const char *path;
+        FUSE_OFF_T size;
+} dokan_truncate_t;
+
+typedef struct
+{
+        const char *path;
+        FUSE_OFF_T size;
+        struct fuse_file_info *fi;
+} dokan_ftruncate_t;
+
+
+typedef struct
+{
+        const char *path;
+        int valid;
+
+        struct timespec ts[2];
+
+        mode_t mode;
+
+        uid_t uid;
+        gid_t gid;
+} dokan_setattr_t;
 
 int
 dokan_lookup_dir(uint64_t nodeid);
