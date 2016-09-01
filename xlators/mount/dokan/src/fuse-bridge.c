@@ -38,7 +38,6 @@ get_fuse_xlator()
         return gf_fuse_this_xl;
 }
 
-#ifdef NEVER
 static void fuse_invalidate_inode(xlator_t* this, uint64_t fuse_ino);
 
 /*
@@ -46,7 +45,7 @@ static void fuse_invalidate_inode(xlator_t* this, uint64_t fuse_ino);
  * page cache.
  */
 static int32_t
-fuse_invalidate(xlator_t* this, inode_t* inode)
+fuse_invalidate_2(xlator_t* this, inode_t* inode)
 {
 
         fuse_private_t* priv = this->private;
@@ -71,7 +70,6 @@ fuse_invalidate(xlator_t* this, inode_t* inode)
 
         return 0;
 }
-#endif /* NEVER */
 
 static int32_t
 fuse_forget_cbk(xlator_t* this, inode_t* inode)
@@ -942,14 +940,13 @@ fuse_fd_cbk(call_frame_t* frame, void* cookie, xlator_t* this, int32_t op_ret,
                 }
 
                 /*
-                                if (dokan_send_result(this, finh, &foo) == ENOENT)
-                   {
-                                        gf_log("glusterfs-fuse", GF_LOG_DEBUG,
-                                               "open(%s) got EINTR",
-                   state->loc.path);
-                                        gf_fd_put(priv->fdtable, state->fd_no);
-                                        goto out;
-                                }
+                   if (dokan_send_result(this, finh, &foo) == ENOENT) {
+                        gf_log("glusterfs-fuse", GF_LOG_DEBUG,
+                               "open(%s) got EINTR",
+                                state->loc.path);
+                        gf_fd_put(priv->fdtable, state->fd_no);
+                        goto out;
+                   }
                 */
                 fd_bind(fd);
 
@@ -2012,7 +2009,7 @@ fuse_rename(xlator_t* this, dokan_msg_t* msg)
                 return;
         }
 
-        if (split_pathname(args->from, &newpath, &newname) != 0) {
+        if (split_pathname(args->to, &newpath, &newname) != 0) {
                 dokan_send_err(this, msg, ENOMEM);
                 goto out;
         }
@@ -2025,7 +2022,7 @@ fuse_rename(xlator_t* this, dokan_msg_t* msg)
         if (inode == NULL) {
                 dokan_send_err(this, msg, ENOENT);
                 GF_FREE(finh);
-                return;
+                goto out;
         }
 
         fri.newdir = inode_to_fuse_nodeid(inode);
@@ -2908,7 +2905,7 @@ static void
 fuse_fsync(xlator_t* this, dokan_msg_t* msg)
 {
         dokan_fsync_t* args = (dokan_fsync_t*)msg->args;
-        fuse_in_header_t* finh = NULL;
+        fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
 
         fd_t* fd = NULL;
@@ -3618,14 +3615,14 @@ fuse_fsyncdir_resume(fuse_state_t* state)
 }
 
 static void
-fuse_fsyncdir(xlator_t* this, fuse_in_header_t* finh, void* msg)
+fuse_fsyncdir(xlator_t* this, dokan_msg_t* msg)
 {
-        struct fuse_fsync_in* fsi = msg;
-
+        dokan_fsyncdir_t *args = (dokan_fsyncdir_t *)msg->args;
+        fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
         fd_t* fd = NULL;
 
-        fd = FH_TO_FD(fsi->fh);
+        fd = FH_TO_FD(args->fi->fh);
 
         FILL_STATE(msg, this, finh, NULL, state);
         state->stub = msg;
@@ -3633,10 +3630,30 @@ fuse_fsyncdir(xlator_t* this, fuse_in_header_t* finh, void* msg)
 
         fuse_resolve_fd_init(state, &state->resolve, fd);
 
-        state->flags = fsi->fsync_flags;
+        state->flags = args->isdatasync;
         fuse_resolve_and_resume(state, fuse_fsyncdir_resume);
 
         return;
+}
+
+static int
+dokan_fsyncdir (const char *path, int isdatasync, struct fuse_file_info *fi)
+{
+        dokan_msg_t* msg = NULL;
+        dokan_fsyncdir_t* params = NULL;
+
+        msg = dokan_get_req(FUSE_FSYNCDIR, sizeof(dokan_fsyncdir_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (dokan_fsyncdir_t*)msg->args;
+        params->path = path;
+        params->isdatasync = isdatasync;
+        params->fi = fi;
+
+        dokan_send_req(msg);
+
+        return dokan_get_result_and_cleanup(msg);
 }
 
 static int
@@ -4484,14 +4501,14 @@ fuse_getlk_resume(fuse_state_t* state)
 }
 
 static void
-fuse_getlk(xlator_t* this, fuse_in_header_t* finh, void* msg)
+fuse_getlk(xlator_t* this, dokan_msg_t* msg)
 {
-        struct fuse_lk_in* fli = msg;
-
+        dokan_setlk_t* args = (dokan_setlk_t*)msg->args;
+        fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
         fd_t* fd = NULL;
 
-        fd = FH_TO_FD(fli->fh);
+        fd = FH_TO_FD(args->fi->fh);
         FILL_STATE(msg, this, finh, NULL, state);
 
         state->stub = msg;
@@ -4499,18 +4516,13 @@ fuse_getlk(xlator_t* this, fuse_in_header_t* finh, void* msg)
 
         fuse_resolve_fd_init(state, &state->resolve, fd);
 
-        convert_fuse_file_lock(&fli->lk, &state->lk_lock, fli->owner);
+        convert_fuse_file_lock(&args->lk, &state->lk_lock, args->fi->lock_owner);
 
-        state->lk_owner = fli->owner;
+        state->lk_owner = args->fi->lock_owner;
 
         fuse_resolve_and_resume(state, fuse_getlk_resume);
 
         return;
-}
-
-static void
-dokan_getlk(xlator_t* this, fuse_in_header_t* finh, void* msg)
-{
 }
 
 static int
@@ -4579,14 +4591,14 @@ fuse_setlk_resume(fuse_state_t* state)
 }
 
 static void
-fuse_setlk(xlator_t* this, fuse_in_header_t* finh, void* msg)
+fuse_setlk(xlator_t* this, dokan_msg_t* msg)
 {
-        struct fuse_lk_in* fli = msg;
-
+        dokan_setlk_t* args = (dokan_setlk_t*)msg->args;
+        fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
         fd_t* fd = NULL;
 
-        fd = FH_TO_FD(fli->fh);
+        fd = FH_TO_FD(args->fi->fh);
         FILL_STATE(msg, this, finh, NULL, state);
 
         state->stub = msg;
@@ -4595,19 +4607,46 @@ fuse_setlk(xlator_t* this, fuse_in_header_t* finh, void* msg)
 
         fuse_resolve_fd_init(state, &state->resolve, fd);
 
-        convert_fuse_file_lock(&fli->lk, &state->lk_lock, fli->owner);
+        convert_fuse_file_lock(&args->lk, &state->lk_lock, args->fi->lock_owner);
 
-        state->lk_owner = fli->owner;
+        state->lk_owner = args->fi->lock_owner;
 
         fuse_resolve_and_resume(state, fuse_setlk_resume);
 
         return;
 }
 
-static void*
-dokan_init(struct fuse_conn_info* conn)
+static int
+dokan_lock(const char *path, struct fuse_file_info *fi, int cmd,
+        struct flock *lock)
 {
-        xlator_t* this = get_fuse_xlator();
+        dokan_msg_t* msg = NULL;
+        dokan_setlk_t* params = NULL;
+
+        msg = dokan_get_req(lock->l_type == F_WRLCK ? FUSE_SETLK : FUSE_SETLKW,
+                sizeof(dokan_setlk_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (dokan_init_t*)msg->args;
+        params->path = path;
+        params->fi = fi;
+        params->lk.start = lock->l_start;
+        params->lk.end = lock->l_start + lock->l_len;
+        params->lk.type = lock->l_type;
+        params->lk.pid = lock->l_pid;
+
+        dokan_send_req(msg);
+
+        return dokan_get_result_and_cleanup(msg);
+}
+
+
+static void
+fuse_init (xlator_t* this, dokan_msg_t* msg)
+{
+        dokan_init_t *args = (dokan_init_t *)msg->args;
+        struct fuse_conn_info* conn = args->conn;
         fuse_private_t* priv = NULL;
         int ret = 0;
 
@@ -4617,7 +4656,8 @@ dokan_init(struct fuse_conn_info* conn)
                 gf_log("glusterfs-fuse", GF_LOG_ERROR,
                        "got INIT after first message");
 
-                return NULL;
+                dokan_send_err(this, msg, -1);
+                return;
         }
 
         priv->init_recvd = 1;
@@ -4637,15 +4677,32 @@ dokan_init(struct fuse_conn_info* conn)
         priv->reverse_fuse_thread_started = _gf_true;
 #endif /* NEVER */
 
-        /* TODO: fix cache */
-        priv->fopen_keep_cache = 0;
-
         gf_log("glusterfs-fuse", GF_LOG_INFO,
                "FUSE inited with protocol versions:"
                " glusterfs %d.%d dokan %d.%d",
                FUSE_KERNEL_VERSION, FUSE_KERNEL_MINOR_VERSION,
                conn->proto_major, conn->proto_minor);
-        return NULL;
+
+        dokan_send_err(this, msg, 0);
+        return;
+}
+
+static void*
+dokan_init(struct fuse_conn_info* conn)
+{
+        dokan_msg_t* msg = NULL;
+        dokan_init_t* params = NULL;
+
+        msg = dokan_get_req(FUSE_INIT, sizeof(dokan_init_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (dokan_init_t*)msg->args;
+        params->conn = conn;
+
+        dokan_send_req(msg);
+
+        return dokan_get_result_and_cleanup(msg);
 }
 
 static void
@@ -5399,44 +5456,44 @@ dokan_send_result(xlator_t* this, dokan_msg_t* msg, int ret)
                         pthread_mutex_init(&release_msg->mutex, NULL);
                         pthread_cond_init(&release_msg->cond, NULL);
                 }
-                else {
+
+                priv = this->private;
+
+                pthread_mutex_lock(&priv->msg_mutex);
+                {
+                        if (release_msg) {
+                                list_add(&release_msg->list, &priv->msg_list);
+
+                                notify = 1;
+                        }
+
+                        list_for_each_entry_safe(wait_msg, n, &priv->wait_list, list) {
+
+                                inner_msg = ((dokan_waitmsg_t*)wait_msg->args)->msg;
+
+                                gf_log(this->name, GF_LOG_DEBUG,
+                                       "fuse try to clean message %p type: %d, unique: %d",
+                                        inner_msg, inner_msg->type, inner_msg->unique);
+
+                                if (inner_msg->unique == msg->unique) {
+                                        list_del_init(wait_msg);
+                                        GF_FREE(wait_msg);
+
+                                        notify = 1;
+                                        break;
+                                }
+                        }
+
+                        if (notify)
+                                pthread_cond_broadcast(&priv->msg_cond);
+                }
+                pthread_mutex_unlock(&priv->msg_mutex);
+
+                if (!msg->autorelease) {
                         pthread_cond_broadcast(&msg->cond);
                 }
         }
         pthread_mutex_unlock(&msg->mutex);
-
-        priv = this->private;
-
-        pthread_mutex_lock(&priv->msg_mutex);
-        {
-                if (release_msg) {
-                        list_add(&release_msg->list, &priv->msg_list);
-
-                        notify = 1;
-                        pthread_cond_broadcast(&priv->msg_cond);
-                }
-
-                list_for_each_entry_safe(wait_msg, n, &priv->wait_list, list) {
-
-                        inner_msg = ((dokan_waitmsg_t*)wait_msg->args)->msg;
-
-                        gf_log(this->name, GF_LOG_DEBUG,
-                               "fuse try to clean message %p type: %d, unique: %d",
-                                inner_msg, inner_msg->type, inner_msg->unique);
-
-                        if (inner_msg->unique == msg->unique) {
-                                list_del_init(wait_msg);
-                                GF_FREE(wait_msg);
-
-                                notify = 1;
-                                break;
-                        }
-                }
-
-                if (notify)
-                        pthread_cond_broadcast(&priv->msg_cond);
-        }
-        pthread_mutex_unlock(&priv->msg_mutex);
 
         return 0;
 }
@@ -5665,8 +5722,8 @@ fuse_thread_proc(void* data)
                 pthread_mutex_unlock(&priv->msg_mutex);
 
                 gf_log(this->name, GF_LOG_DEBUG,
-                       "fuse recieved message type: %d",
-                       msg->type);
+                       "fuse recieved message type: %d, unique: %ld",
+                       msg->type, msg->unique);
 
                 if (msg->type >= FUSE_OP_HIGH)
                         fuse_enosys(this, msg);
@@ -6037,19 +6094,19 @@ static fuse_handler_t* fuse_std_ops[FUSE_OP_HIGH] = {
           [FUSE_LISTXATTR]      = fuse_listxattr,
           [FUSE_REMOVEXATTR]    = fuse_removexattr,
           [FUSE_FLUSH]          = fuse_flush,
-          // [FUSE_INIT]        = fuse_init,
+          [FUSE_INIT]           = fuse_init,
           [FUSE_OPENDIR]        = fuse_opendir,
           [FUSE_READDIR]        = fuse_lookup_dir,
           [FUSE_RELEASEDIR]     = fuse_releasedir,
-          // [FUSE_FSYNCDIR]    = fuse_fsyncdir,
-          //  [FUSE_GETLK]       = fuse_getlk,
-          //  [FUSE_SETLK]       = fuse_setlk,
-          //  [FUSE_SETLKW]      = fuse_setlk,
+          [FUSE_FSYNCDIR]       = fuse_fsyncdir,
+          [FUSE_GETLK]          = fuse_getlk,
+          [FUSE_SETLK]          = fuse_setlk,
+          [FUSE_SETLKW]         = fuse_setlk,
           [FUSE_ACCESS]         = fuse_access,
           [FUSE_CREATE]         = fuse_create,
           /* [FUSE_INTERRUPT] */
           /* [FUSE_BMAP] */
-          //   [FUSE_DESTROY]     = fuse_destroy,
+          // [FUSE_DESTROY]     = fuse_destroy,
           /* [FUSE_IOCTL] */
           /* [FUSE_POLL] */
           /* [FUSE_NOTIFY_REPLY] */
@@ -6091,14 +6148,14 @@ struct fuse_operations dokan_operations = {
         .opendir        = dokan_opendir,
         .readdir        = dokan_readdirp,
         .releasedir     = dokan_releasedir,
-        .fsyncdir       = NULL,
+        .fsyncdir       = dokan_fsyncdir,
         .init           = dokan_init,
         .destroy        = dokan_destroy,
         .access         = dokan_access,
         .create         = dokan_create,
         .ftruncate      = dokan_ftruncate,
         .fgetattr       = dokan_fgetattr,
-        .lock           = NULL,
+        .lock           = dokan_lock,
         .utimens        = dokan_utimens,
         .bmap           = NULL,
 
@@ -6529,7 +6586,12 @@ fini(xlator_t* this_xl)
 
 struct xlator_fops fops;
 
-struct xlator_cbks cbks = {};
+struct xlator_cbks cbks = {
+        .invalidate = fuse_invalidate_2,
+        .forget     = fuse_forget_cbk,
+        .release    = fuse_internal_release
+};
+
 
 struct xlator_dumpops dumpops = {
         .priv = fuse_priv_dump,

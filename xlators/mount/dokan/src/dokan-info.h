@@ -3,6 +3,11 @@
 
 typedef struct
 {
+        struct fuse_conn_info* conn;
+} dokan_init_t;
+
+typedef struct
+{
         const char* path;
         struct FUSE_STAT* stbuf;
         struct fuse_file_info* fi;
@@ -78,7 +83,8 @@ typedef struct
 {
         char* path;
         struct fuse_file_info* fi;
-} dokan_open_t, dokan_flush_t, dokan_release_t, dokan_opendir_t, dokan_releasedir_t;
+} dokan_open_t, dokan_flush_t, dokan_release_t, dokan_opendir_t,
+  dokan_releasedir_t;
 
 typedef struct
 {
@@ -104,7 +110,7 @@ typedef struct
         const char* path;
         int isdatasync;
         struct fuse_file_info* fi;
-} dokan_fsync_t;
+} dokan_fsync_t, dokan_fsyncdir_t;
 
 typedef struct
 {
@@ -192,6 +198,13 @@ typedef struct
         uid_t uid;
         gid_t gid;
 } dokan_setattr_t;
+
+typedef struct
+{
+        const char *path;
+        struct fuse_file_info *fi;
+        struct fuse_file_lock lk;
+} dokan_setlk_t;
 
 int
 dokan_lookup_dir(uint64_t nodeid);
