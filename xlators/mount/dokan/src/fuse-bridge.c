@@ -2746,8 +2746,8 @@ dokan_write(const char* path, const char* buf, size_t size, off_t offset,
                 dokan_send_req(msg);
                 ret = dokan_get_result_and_cleanup(msg);
 
-                if (ret == 0)
-                        n -= part;
+                if (ret > 0)
+                        n -= ret;
                 else
                         break;
         }
