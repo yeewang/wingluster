@@ -50,54 +50,56 @@ typedef void(fuse_handler_t)(xlator_t* this, dokan_msg_t* msg);
 
 struct fuse_private
 {
-        uint32_t proto_minor;
-        char* volfile;
-        size_t volfile_size;
-        char* mount_point;
-        struct iobuf* iobuf;
+        struct fuse             *fuse;
+        uint32_t                proto_minor;
+        char                    *volfile;
+        size_t                  volfile_size;
+        char                    *mount_point;
+        struct iobuf            *iobuf;
+        size_t                  iobuf_size;
 
-        pthread_t fuse_thread;
-        pthread_t mount_thread;
+        pthread_t               fuse_thread;
+        pthread_t               mount_thread;
 
-        char fuse_thread_started;
-        char mount_thread_started;
+        char                    fuse_thread_started;
+        char                    mount_thread_started;
 
-        uint32_t direct_io_mode;
+        uint32_t                direct_io_mode;
 
-        double entry_timeout;
-        double negative_timeout;
-        double attribute_timeout;
+        double                  entry_timeout;
+        double                  negative_timeout;
+        double                  attribute_timeout;
 
-        pthread_cond_t sync_cond;
-        pthread_mutex_t sync_mutex;
-        char event_recvd;
+        pthread_cond_t          sync_cond;
+        pthread_mutex_t         sync_mutex;
+        char                    event_recvd;
 
-        char init_recvd;
+        char                    init_recvd;
 
-        pthread_cond_t msg_cond;
-        pthread_mutex_t msg_mutex;
-        struct list_head msg_list;
-        struct list_head wait_list;
+        pthread_cond_t          msg_cond;
+        pthread_mutex_t         msg_mutex;
+        struct list_head        msg_list;
+        struct list_head        wait_list;
 
-        gf_boolean_t strict_volfile_check;
+        gf_boolean_t            strict_volfile_check;
 
-        fuse_handler_t** fuse_ops;
-        fuse_handler_t** fuse_ops0;
-        pthread_mutex_t fuse_dump_mutex;
-        int fuse_dump_fd;
+        fuse_handler_t          **fuse_ops;
+        fuse_handler_t          **fuse_ops0;
+        pthread_mutex_t         fuse_dump_mutex;
+        int                     fuse_dump_fd;
 
-        glusterfs_graph_t* next_graph;
-        xlator_t* active_subvol;
+        glusterfs_graph_t       *next_graph;
+        xlator_t                *active_subvol;
 
-        pid_t client_pid;
-        gf_boolean_t client_pid_set;
-        unsigned uid_map_root;
-        gf_boolean_t acl;
-        gf_boolean_t selinux;
-        gf_boolean_t read_only;
-        int32_t fopen_keep_cache;
-        int32_t gid_cache_timeout;
-        gf_boolean_t enable_ino32;
+        pid_t                   client_pid;
+        gf_boolean_t            client_pid_set;
+        unsigned                uid_map_root;
+        gf_boolean_t            acl;
+        gf_boolean_t            selinux;
+        gf_boolean_t            read_only;
+        int32_t                 fopen_keep_cache;
+        int32_t                 gid_cache_timeout;
+        gf_boolean_t            enable_ino32;
         /* This is the mount option for disabling the root-squash for the
            mount irrespective of whether the root-squash option for the
            volume is set or not. But this option is honoured only for
@@ -105,36 +107,36 @@ struct fuse_private
            not have any affect and the volume option for root-squash is
            honoured.
         */
-        gf_boolean_t no_root_squash;
-        fdtable_t* fdtable;
-        gid_cache_t gid_cache;
-        char* fuse_mountopts;
+        gf_boolean_t            no_root_squash;
+        fdtable_t               *fdtable;
+        gid_cache_t             gid_cache;
+        char                    *fuse_mountopts;
 
         /* For fuse-reverse-validation */
-        struct list_head invalidate_list;
-        pthread_cond_t invalidate_cond;
-        pthread_mutex_t invalidate_mutex;
-        gf_boolean_t reverse_fuse_thread_started;
+        struct list_head        invalidate_list;
+        pthread_cond_t          invalidate_cond;
+        pthread_mutex_t         invalidate_mutex;
+        gf_boolean_t            reverse_fuse_thread_started;
 
         /* For communicating with separate mount thread. */
-        int status_pipe[2];
+        int                     status_pipe[2];
 
         /* for fuse queue length and congestion threshold */
-        int background_qlen;
-        int congestion_threshold;
+        int                     background_qlen;
+        int                     congestion_threshold;
 
         /* for using fuse-kernel readdirp*/
-        gf_boolean_t use_readdirp;
+        gf_boolean_t            use_readdirp;
 
         /* fini started, helps prevent multiple epoll worker threads
          * firing up the fini routine */
-        gf_boolean_t fini_invoked;
+        gf_boolean_t            fini_invoked;
 
         /* resolve gid with getgrouplist() instead of /proc/%d/status */
-        gf_boolean_t resolve_gids;
+        gf_boolean_t            resolve_gids;
 
         /* Enable or disable capability support */
-        gf_boolean_t capability;
+        gf_boolean_t            capability;
 };
 typedef struct fuse_private fuse_private_t;
 

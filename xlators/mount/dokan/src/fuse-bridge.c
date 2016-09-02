@@ -2573,7 +2573,7 @@ fuse_read(xlator_t* this, dokan_msg_t* msg)
         state->size = args->size;
         state->off = args->offset;
         state->io_flags = args->fi->flags;
-        state->flags = args->fi->flags; // ?
+        state->flags = args->fi->flags;
         state->xdata = dict_new();
 
         fuse_resolve_fd_init(state, &state->resolve, fd);
@@ -2705,7 +2705,9 @@ fuse_write(xlator_t* this, dokan_msg_t* msg)
 
         state->lk_owner = args->fi->lock_owner;
 
-        state->vector.iov_base = args->buf;
+        memcpy(priv->iobuf->ptr, args->buf, args->size);
+
+        state->vector.iov_base = priv->iobuf->ptr;
         state->vector.iov_len = args->size;
 
         fuse_resolve_and_resume(state, fuse_write_resume);
@@ -2717,23 +2719,40 @@ static int
 dokan_write(const char* path, const char* buf, size_t size, off_t offset,
             struct fuse_file_info* fi)
 {
+        xlator_t* this = get_fuse_xlator();
         dokan_msg_t* msg = NULL;
         dokan_write_t* params = NULL;
+        size_t n = size;
+        size_t part = 0;
+        int ret = -1;
 
-        msg = dokan_get_req(FUSE_WRITE, sizeof(dokan_write_t));
-        if (msg == NULL)
-                return -1;
+        while (n > 0)  {
+                if (n > this->ctx->page_size)
+                        part = this->ctx->page_size;
+                else
+                        part = n;
 
-        params = (dokan_write_t*)msg->args;
-        params->path = path;
-        params->buf = buf;
-        params->size = size;
-        params->offset = offset;
-        params->fi = fi;
+                msg = dokan_get_req(FUSE_WRITE, sizeof(dokan_write_t));
+                if (msg == NULL)
+                        return -1;
 
-        dokan_send_req(msg);
+                params = (dokan_write_t*)msg->args;
+                params->path = path;
+                params->buf = buf + (size - n);
+                params->size = part;
+                params->offset = offset + (size - n);
+                params->fi = fi;
 
-        return dokan_get_result_and_cleanup(msg);
+                dokan_send_req(msg);
+                ret = dokan_get_result_and_cleanup(msg);
+
+                if (ret == 0)
+                        n -= part;
+                else
+                        break;
+        }
+
+        return -1;
 }
 
 void
@@ -5643,11 +5662,11 @@ static void*
 fuse_thread_proc(void* data)
 {
         xlator_t* this = NULL;
-        fuse_private_t* priv = NULL;
-        ssize_t res = 0;
-        dokan_msg_t* msg = NULL;
-        dokan_msg_t* waitmsg = NULL;
-        dokan_waitmsg_t* args = NULL;
+        fuse_private_t * priv = NULL;
+        struct iobuf * iobuf = NULL;
+        dokan_msg_t * msg = NULL;
+        dokan_msg_t * waitmsg = NULL;
+        dokan_waitmsg_t * args = NULL;
         int ret = -1;
 
         this = data;
@@ -5661,6 +5680,15 @@ fuse_thread_proc(void* data)
 
                 if (priv->init_recvd)
                         fuse_graph_sync(this);
+
+
+                /* TODO: This place should always get maximum supported buffer
+                   size from 'fuse', which is as of today 128KB. If we bring in
+                   support for higher block sizes support, then we should be
+                   changing this one too */
+                iobuf = iobuf_get (this->ctx->iobuf_pool);
+                if (iobuf == NULL)
+                        break;
 
                 pthread_mutex_lock(&priv->msg_mutex);
                 {
@@ -5716,7 +5744,7 @@ fuse_thread_proc(void* data)
                                 waitmsg->ret = -1;
                                 waitmsg->type = FUSE_WAITMSG;
 
-                                list_add_tail(waitmsg, &priv->wait_list);
+                                list_add_tail(&waitmsg->list, &priv->wait_list);
                         }
                 }
                 pthread_mutex_unlock(&priv->msg_mutex);
@@ -5725,14 +5753,22 @@ fuse_thread_proc(void* data)
                        "fuse recieved message type: %d, unique: %ld",
                        msg->type, msg->unique);
 
+                priv->iobuf = iobuf;
+
                 if (msg->type >= FUSE_OP_HIGH)
                         fuse_enosys(this, msg);
                 else {
                         priv->fuse_ops[msg->type](this, msg);
                 }
+
+                iobuf_unref (iobuf);
         }
 
 cleanup_exit:
+
+        /* Kill the whole process, not just this thread. */
+        kill (getpid(), SIGTERM);
+
         return NULL;
 }
 
@@ -6171,11 +6207,10 @@ static void*
 dokan_mount_proc(void* data)
 {
         struct mount_data* md = (struct mount_data*)data;
-        int ret = -1;
 
-        ret = gf_fuse_mount(md->mountpoint, md->fsname, md->mountflags,
-                            md->mountflags, md->status_fd);
-        if (ret != 0) {
+        md->private->fuse = gf_fuse_mount(md->mountpoint, md->fsname, md->mountflags,
+                            md->mnt_param, md->status_fd);
+        if (md->private->fuse == NULL) {
                 gf_log("glusterfs-fuse", GF_LOG_DEBUG, "mount failed (%s)",
                        md->mountpoint);
         }
@@ -6257,6 +6292,7 @@ init(xlator_t* this_xl)
                 goto cleanup_exit;
         }
         this_xl->private = (void*)priv;
+        priv->fuse = NULL;
         priv->mount_point = NULL;
 
         INIT_LIST_HEAD(&priv->invalidate_list);
@@ -6478,7 +6514,7 @@ init(xlator_t* this_xl)
         mnt_data->mountpoint = priv->mount_point;
         mnt_data->fsname = fsname;
         mnt_data->mountflags = mntflags;
-        mnt_data->mnt_param = mntflags;
+        mnt_data->mnt_param = mnt_args;
         mnt_data->status_fd = priv->status_pipe[1];
 
         ret = gf_thread_create(&priv->mount_thread, NULL, dokan_mount_proc,
@@ -6573,8 +6609,7 @@ fini(xlator_t* this_xl)
                 gf_log(this_xl->name, GF_LOG_INFO, "Unmounting '%s'.",
                        mount_point);
 
-                // TODO: umount and release the mount thread,
-                gf_fuse_unmount(mount_point, -1);
+                gf_fuse_unmount(mount_point, priv->fuse);
                 close(priv->fuse_dump_fd);
                 dict_del(this_xl->options, ZR_MOUNTPOINT_OPT);
         }
