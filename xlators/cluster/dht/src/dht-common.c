@@ -9,11 +9,6 @@
 */
 
 
-#ifndef _CONFIG_H
-#define _CONFIG_H
-#include "config.h"
-#endif
-
 /* TODO: add NS locking */
 
 #include "glusterfs.h"
@@ -1579,7 +1574,7 @@ unwind_hashed_and_cached:
         DHT_STRIP_PHASE1_FLAGS (&local->stbuf);
         dht_set_fixed_dir_stat (&local->postparent);
         DHT_STACK_UNWIND (lookup, frame, local->op_ret, local->op_errno,
-                          local->loc.inode, &local->stbuf, local->xattr,
+                          local->inode, &local->stbuf, local->xattr,
                           &local->postparent);
         return 0;
 }
@@ -2831,11 +2826,11 @@ dht_find_local_subvol_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                 goto unwind;
         }
 
-        DHT_STACK_UNWIND (getxattr, frame, 0, 0, NULL, NULL);
+        DHT_STACK_UNWIND (getxattr, frame, 0, 0, xattr, xdata);
         goto out;
 
  unwind:
-        DHT_STACK_UNWIND (getxattr, frame, -1, local->op_errno, NULL, NULL);
+        DHT_STACK_UNWIND (getxattr, frame, -1, local->op_errno, NULL, xdata);
  out:
         return 0;
 }
@@ -3674,7 +3669,7 @@ out:
 int
 dht_setxattr2 (xlator_t *this, xlator_t *subvol, call_frame_t *frame, int ret)
 {
-        dht_local_t *local    = NULL;
+        dht_local_t  *local  = NULL;
         int          op_errno = EINVAL;
 
         if (!frame || !frame->local)
@@ -4072,6 +4067,7 @@ dht_file_removexattr_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
         /* Phase 1 of migration */
         if (IS_DHT_MIGRATION_PHASE1 (stbuf)) {
                 inode = (local->fd) ? local->fd->inode : local->loc.inode;
+
                 ret = dht_inode_ctx_get_mig_info (this, inode,
                                                   &subvol1, &subvol2);
                 if (!dht_mig_info_is_invalid (local->cached_subvol,
@@ -5267,12 +5263,15 @@ dht_mknod_linkfile_create_cbk (call_frame_t *frame, void *cookie,
                 goto err;
         }
 
-        if (op_ret == -1)
+        if (op_ret == -1) {
+                local->op_errno = op_errno;
                 goto err;
+        }
 
         conf = this->private;
         if (!conf) {
                 local->op_errno =  EINVAL;
+                op_errno = EINVAL;
                 goto err;
         }
 
@@ -5297,7 +5296,6 @@ err:
                                   op_errno, NULL, NULL, NULL,
                                   NULL, NULL);
         }
-
         return 0;
 }
 
@@ -5826,13 +5824,14 @@ dht_guard_parent_layout_during_entry_fop (xlator_t *subvol, call_stub_t *stub)
         lk_array = GF_CALLOC (count, sizeof (*lk_array), gf_common_mt_char);
 
         if (lk_array == NULL) {
+                local->op_errno = ENOMEM;
+
                 gf_msg (this->name, GF_LOG_WARNING, local->op_errno,
                         DHT_MSG_PARENT_LAYOUT_CHANGED,
                         "%s (%s/%s) (path: %s): "
                         "calloc failure",
                         gf_fop_list[stub->fop], pgfid, loc->name, loc->path);
 
-                local->op_errno = ENOMEM;
                 goto err;
         }
 
@@ -5844,7 +5843,7 @@ dht_guard_parent_layout_during_entry_fop (xlator_t *subvol, call_stub_t *stub)
                 gf_msg (this->name, GF_LOG_WARNING, local->op_errno,
                         DHT_MSG_PARENT_LAYOUT_CHANGED,
                         "%s (%s/%s) (path: %s): "
-                        "lock allocation faild",
+                        "lock allocation failed",
                         gf_fop_list[stub->fop], pgfid, loc->name, loc->path);
 
                 goto err;
@@ -6450,6 +6449,7 @@ dht_create_linkfile_create_cbk (call_frame_t *frame, void *cookie,
         conf = this->private;
         if (!conf) {
                 local->op_errno = EINVAL;
+                op_errno = EINVAL;
                 goto err;
         }
 
@@ -6466,7 +6466,6 @@ dht_create_linkfile_create_cbk (call_frame_t *frame, void *cookie,
                     local->umask, local->fd, local->params);
 
         return 0;
-
 err:
         if (local && local->lock.locks) {
                 local->refresh_layout_unlock (frame, this, -1, 1);
@@ -6475,7 +6474,6 @@ err:
                                   op_errno, NULL, NULL, NULL,
                                   NULL, NULL, NULL);
         }
-
         return 0;
 }
 
@@ -8185,7 +8183,8 @@ err:
         if (xattrs)
                 dict_unref (xattrs);
 
-        DHT_STACK_DESTROY (lookup_frame);
+        if (lookup_frame)
+                DHT_STACK_DESTROY (lookup_frame);
         return 0;
 }
 

@@ -39,7 +39,7 @@
 #define MASTER_VOL_KEY_SIZE (32)
 #define NMTD_VOL_KEY_SIZE (16)
 
-#if !defined(GF_LINUX_HOST_OS)
+#if !defined(GF_LINUX_HOST_OS) && !defined(GF_CYGWIN_HOST_OS)
 typedef off_t loff_t;
 #endif
 

@@ -209,5 +209,10 @@ typedef struct
 int
 dokan_lookup_dir(uint64_t nodeid);
 
+void
+dokan_lookup(xlator_t* this, ino_t parent, char* bname);
+
+void* dokan_mount_proc(void* data);
+
 #endif /* _GF_DOKAN_INFO_H_ */
 

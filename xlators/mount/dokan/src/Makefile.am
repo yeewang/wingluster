@@ -13,9 +13,10 @@ noinst_HEADERS = $(noinst_HEADERS_common) $(noinst_HEADERS_windows)
 xlator_LTLIBRARIES = dokan.la
 xlatordir = $(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/mount
 
-dokan_la_SOURCES = fuse-helpers.c fuse-resolve.c fuse-bridge.c \
+dokan_la_SOURCES = fuse-helpers.c fuse-resolve.c fuse-bridge.c dokan-bridge.c \
 	$(CONTRIBDIR)/fuse-lib/misc.c \
-	$(CONTRIBDIR)/dokan/mount_dokan.c $(CONTRIBDIR)/dokan/mount_dokan-common.c
+	$(CONTRIBDIR)/dokan/mount_dokan.c \
+	$(CONTRIBDIR)/dokan/mount_dokan-common.c
 
 dokan_la_LDFLAGS = -module -avoid-version  -no-undefined
 dokan_la_LIBADD = $(GF_LDADD) $(top_builddir)/libglusterfs/src/libglusterfs.la

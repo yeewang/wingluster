@@ -2154,6 +2154,11 @@ daemonize (glusterfs_ctx_t *ctx)
         if (cmd_args->debug_mode)
                 goto postfork;
 
+#ifdef GF_CYGWIN_HOST_OS
+                /* fork() cannot work well in cygwin. */
+                goto postfork;
+#endif /* GF_CYGWIN_HOST_OS */
+
         ret = pipe (ctx->daemon_pipe);
         if (ret) {
                 /* If pipe() fails, retain daemon_pipe[] = {-1, -1}

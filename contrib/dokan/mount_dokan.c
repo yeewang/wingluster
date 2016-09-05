@@ -46,7 +46,7 @@ fuse_mount_sys (const char *mountpoint, char *fsname,
         argv[2] = "volname=gluster";
         argv[3] = "-o";
         argv[4] = "fsname=glusterfs";
-        argv[5] = "-d";
+        argv[5] = "-d"; //"-f";
         argv[6] = mountpoint;
         argv[7] = NULL;
 
@@ -100,8 +100,7 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
                                fsname, mountpoint, mnt_param);
 
         free (winpath);
-        gf_log ("glusterfs-fuse", GF_LOG_INFO, "mount agent exited.",
-               fsname, mountpoint, mnt_param);
+        gf_log ("glusterfs-fuse", GF_LOG_INFO, "mount agent exited.");
 
 out:
         if (status_fd >= 0)
