@@ -38,6 +38,8 @@
 #include "syncop.h"
 #include "gidcache.h"
 
+#include "dokan-info.h"
+
 #define FUSE_AUTORELEASE        (FUSE_READDIRPLUS + 1)
 #define FUSE_WAITMSG            (FUSE_READDIRPLUS + 2)
 #define FUSE_OP_HIGH            (FUSE_READDIRPLUS + 3)
@@ -218,7 +220,7 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
         (((_errno == ENOENT) || (_errno == ESTALE))?    \
          GF_LOG_DEBUG)
 
-#define FILL_STATE(msg, this, finh, path, state)                                \
+#define FILL_STATE(msg, this, finh, path, state)                               \
         do {                                                                   \
                 state = get_fuse_state(this, finh);                            \
                 if (!state) {                                                  \
@@ -234,8 +236,9 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                 }                                                              \
                                                                                \
                 if (path) {                                                    \
-                        inode_t *inode =                                       \
-                            fuse_inode_from_path(this, path, state->itable);   \
+                        inode_t *inode = NULL;                                 \
+                                                                               \
+                        inode = fuse_inode_from_path(this, path, state->itable);\
                         if (inode == NULL) {                                   \
                                 dokan_send_err(this, msg, ENOENT);             \
                                 GF_FREE(finh);                                 \
@@ -264,43 +267,6 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                         (_finh)->gid = 0;                                      \
                         (_finh)->pid = 0;                                      \
                 }                                                              \
-        } while (0)
-
-#define INIT_STUB(_stub, _type, _data)                                         \
-        do {                                                                   \
-                pthread_mutex_init(&(_stub)->mutex, NULL);                     \
-                pthread_cond_init(&(_stub)->cond, NULL);                       \
-                (_stub)->fin = 0;                                              \
-                (_stub)->type = (_type);                                       \
-                (_stub)->data = (_data);                                       \
-        } while (0)
-
-#define NOTIFY_STUB(_stub, _ret)                                               \
-        do {                                                                   \
-                if (_stub != NULL) {                                           \
-                        pthread_mutex_lock(&(_stub)->mutex);                   \
-                        {                                                      \
-                                (_stub)->fin = 1;                              \
-                                (_stub)->ret = (_ret);                         \
-                                pthread_cond_broadcast(&(_stub)->cond);        \
-                        }                                                      \
-                        pthread_mutex_unlock(&(_stub)->mutex);                 \
-                }                                                              \
-        } while (0)
-
-#define DEINIT_STUB(_stub)                                                     \
-        do {                                                                   \
-                pthread_mutex_lock(&(_stub)->mutex);                           \
-                {                                                              \
-                        while (!(_stub)->fin) {                                \
-                                pthread_cond_wait(&(_stub)->cond,              \
-                                                  &(_stub)->mutex);            \
-                        }                                                      \
-                }                                                              \
-                pthread_mutex_unlock(&(_stub)->mutex);                         \
-                                                                               \
-                pthread_mutex_destroy(&(_stub)->mutex);                        \
-                pthread_cond_destroy(&(_stub)->cond);                          \
         } while (0)
 
 #define FUSE_ENTRY_CREATE(this, priv, finh, state, fci, op)                    \
@@ -519,24 +485,5 @@ uint64_t get_fuse_op_unique();
 inode_t* fuse_inode_from_path(xlator_t* this, char* path,
                               inode_table_t* itable);
 int split_pathname(char *pathname, char **path, char **basename);
-
-
-struct mount_data
-{
-        struct fuse_private* private;
-        const char* mountpoint;
-        char* fsname;
-        unsigned long mountflags;
-        char* mnt_param;
-        int status_fd;
-};
-
-int dokan_send_result(xlator_t* this, dokan_msg_t* msg, int ret);
-int dokan_send_err(xlator_t* this, dokan_msg_t* msg, int error);
-dokan_msg_t* dokan_get_req(int type, size_t size);
-void dokan_send_req(dokan_msg_t* msg);
-int dokan_get_result(dokan_msg_t* msg);
-int dokan_get_result_and_cleanup(dokan_msg_t* msg);
-void dokan_cleanup_req(dokan_msg_t* msg);
 
 #endif /* _GF_FUSE_BRIDGE_H_ */

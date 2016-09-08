@@ -1,6 +1,9 @@
 #ifndef _GF_DOKAN_INFO_H_
 #define _GF_DOKAN_INFO_H_
 
+#include <fuse.h>
+#include "fuse-bridge.h"
+
 typedef struct
 {
         struct fuse_conn_info* conn;
@@ -213,6 +216,30 @@ void
 dokan_lookup(xlator_t* this, ino_t parent, char* bname);
 
 void* dokan_mount_proc(void* data);
+
+
+struct mount_data
+{
+        struct fuse_private* private;
+        const char* mountpoint;
+        char* fsname;
+        unsigned long mountflags;
+        char* mnt_param;
+        int status_fd;
+};
+
+int dokan_send_result(xlator_t* this, dokan_msg_t* msg, int ret);
+int dokan_send_err(xlator_t* this, dokan_msg_t* msg, int error);
+dokan_msg_t* dokan_get_req(int type, size_t size);
+void dokan_send_req(dokan_msg_t* msg);
+void dokan_abort_req(dokan_msg_t* msg);
+int dokan_get_result(dokan_msg_t* msg);
+int dokan_get_result_and_cleanup(dokan_msg_t* msg);
+void dokan_cleanup_req(dokan_msg_t* msg);
+
+void
+dokan_perform_lookup(xlator_t *this, char *path, inode_table_t *itable);
+
 
 #endif /* _GF_DOKAN_INFO_H_ */
 

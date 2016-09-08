@@ -427,9 +427,11 @@ dokan_opendir(const char* path, struct fuse_file_info* fi)
         ret = dokan_get_result_and_cleanup(msg);
 
         if (ret == 0) {
+                /* Disable prefetch and put lookup to readdirp
                 fd_t *fd = FH_TO_FD(fi->fh);
                 dokan_lookup_dir(inode_to_fuse_nodeid(fd->inode));
                 fd_unref(fd);
+                */
         }
 
         return ret;
@@ -453,6 +455,32 @@ dokan_lookup_dir(uint64_t nodeid)
         dokan_send_req(msg);
 
         return 0;
+}
+
+void
+dokan_perform_lookup(xlator_t *this, char *path, inode_table_t *itable)
+{
+        inode_t *inode = NULL;
+        char *subdir = dirname(path);
+        char *bname = NULL;
+
+        inode = fuse_inode_from_path(this, subdir, itable);
+        if (inode == NULL)
+                dokan_perform_lookup(this, dirname(subdir), itable);
+        else {
+                bname = basename(path);
+                if (strcmp(bname, ".") != 0 &&
+                    strcmp(bname, "..") != 0) {
+                        if (strcmp(bname, "/") == 0)
+                                bname = "";
+
+                        dokan_lookup(this, inode_to_fuse_nodeid(inode), bname);
+                }
+
+                inode_unref(inode);
+        }
+
+        return NULL;
 }
 
 static int
@@ -939,7 +967,7 @@ dokan_get_req(int type, size_t size)
         dokan_msg_t* msg = NULL;
         struct fuse_context* ctx = get_fuse_header_in();
 
-        msg = GF_CALLOC(1, sizeof(dokan_msg_t) + size, gf_fuse_mt_dokan_msg_t);
+        msg = GF_CALLOC(1, sizeof(dokan_msg_t) + size, gf_common_mt_char);
         if (msg == NULL)
                 return NULL;
 
@@ -970,6 +998,39 @@ dokan_send_req(dokan_msg_t* msg)
                 list_add_tail(&msg->list, &priv->msg_list);
 
                 pthread_cond_broadcast(&priv->msg_cond);
+        }
+        pthread_mutex_unlock(&priv->msg_mutex);
+}
+
+void
+dokan_abort_req(dokan_msg_t* msg)
+{
+        xlator_t* this = get_fuse_xlator();
+        fuse_private_t* priv = NULL;
+        dokan_msg_t* wait_msg = NULL;
+        dokan_msg_t* inner_msg = NULL;
+        dokan_msg_t* n = NULL;
+
+        priv = this->private;
+
+        pthread_mutex_lock(&priv->msg_mutex);
+        {
+
+                list_for_each_entry_safe(wait_msg, n, &priv->wait_list, list) {
+
+                        inner_msg = ((dokan_waitmsg_t*)wait_msg->args)->msg;
+
+                        gf_log(this->name, GF_LOG_DEBUG,
+                               "fuse try to abort message %p type: %d, unique: %lu / %lu",
+                                 inner_msg, inner_msg->type, inner_msg->unique, msg->unique);
+
+                        if (inner_msg->unique == msg->unique) {
+                                list_del_init(&wait_msg->list);
+                                GF_FREE(wait_msg);
+
+                                break;
+                        }
+                }
         }
         pthread_mutex_unlock(&priv->msg_mutex);
 }

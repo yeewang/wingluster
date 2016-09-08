@@ -2882,6 +2882,13 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                 size += FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS +
                                           fde->dirent.namelen + 1);
 
+                if ((strcmp(entry->d_name, ".") != 0) &&
+                    (strcmp(entry->d_name, "..") != 0)) {
+                        dokan_lookup(this,
+                                inode_to_fuse_nodeid(state->fd->inode),
+                                entry->d_name);
+                }
+
                 if (!entry->inode)
                         goto next_entry;
 
@@ -3957,32 +3964,6 @@ fuse_setlk(xlator_t* this, dokan_msg_t* msg)
 
         return;
 }
-
-static int
-dokan_lock(const char *path, struct fuse_file_info *fi, int cmd,
-        struct flock *lock)
-{
-        dokan_msg_t* msg = NULL;
-        dokan_setlk_t* params = NULL;
-
-        msg = dokan_get_req(lock->l_type == F_WRLCK ? FUSE_SETLK : FUSE_SETLKW,
-                sizeof(dokan_setlk_t));
-        if (msg == NULL)
-                return -1;
-
-        params = (dokan_init_t*)msg->args;
-        params->path = path;
-        params->fi = fi;
-        params->lk.start = lock->l_start;
-        params->lk.end = lock->l_start + lock->l_len;
-        params->lk.type = lock->l_type;
-        params->lk.pid = lock->l_pid;
-
-        dokan_send_req(msg);
-
-        return dokan_get_result_and_cleanup(msg);
-}
-
 
 static void
 fuse_init (xlator_t* this, dokan_msg_t* msg)

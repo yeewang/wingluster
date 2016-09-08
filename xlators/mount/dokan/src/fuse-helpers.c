@@ -753,7 +753,6 @@ fuse_inode_from_path (xlator_t *this, char *path, inode_table_t *itable)
         return inode_resolve(itable, path);
 }
 
-
 int split_pathname(char *pathname, char **path, char **basename)
 {
         char *p;
