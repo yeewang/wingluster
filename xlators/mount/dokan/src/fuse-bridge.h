@@ -58,7 +58,9 @@ struct fuse_private
         size_t                  volfile_size;
         char                    *mount_point;
         struct iobuf            *iobuf;
-        size_t                  iobuf_size;
+        void                    *outbuf;
+
+        struct list_head        directory;
 
         pthread_t               fuse_thread;
         pthread_t               mount_thread;
@@ -483,7 +485,10 @@ struct fuse_context* get_fuse_header_in(void);
 
 uint64_t get_fuse_op_unique();
 inode_t* fuse_inode_from_path(xlator_t* this, char* path,
-                              inode_table_t* itable);
+        inode_table_t* itable);
+char * fuse_path_from_path (xlator_t *this, const char *cpath,
+        inode_table_t *itable);
 int split_pathname(char *pathname, char **path, char **basename);
+char * fuse_get_gf_path(xlator_t* this, const char *path);
 
 #endif /* _GF_FUSE_BRIDGE_H_ */

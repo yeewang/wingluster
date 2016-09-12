@@ -209,6 +209,12 @@ typedef struct
         struct fuse_file_lock lk;
 } dokan_setlk_t;
 
+typedef struct
+{
+        struct list_head children;
+        char parent[250];
+} dokan_directory_node;
+
 int
 dokan_lookup_dir(uint64_t nodeid);
 

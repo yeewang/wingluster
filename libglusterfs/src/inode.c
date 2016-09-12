@@ -56,10 +56,10 @@ hash_dentry (inode_t *parent, const char *name, int mod)
         int hash = 0;
         int ret = 0;
 
-        hash = *name;
+        hash = tolower(*name);
         if (hash) {
                 for (name += 1; *name != '\0'; name++) {
-                        hash = (hash << 5) - hash + *name;
+                        hash = (hash << 5) - hash + tolower(*name);
                 }
         }
         ret = (hash + (unsigned long)parent) % mod;
@@ -299,7 +299,7 @@ __dentry_search_for_inode (inode_t *inode, uuid_t pargfid, const char *name)
 
         list_for_each_entry (tmp, &inode->dentry_list, inode_list) {
                 if ((gf_uuid_compare (tmp->parent->gfid, pargfid) == 0) &&
-                    !strcmp (tmp->name, name)) {
+                    !strcasecmp (tmp->name, name)) {
                         dentry = tmp;
                         break;
                 }
@@ -737,7 +737,7 @@ __dentry_grep (inode_table_t *table, inode_t *parent, const char *name)
         hash = hash_dentry (parent, name, table->hashsize);
 
         list_for_each_entry (tmp, &table->name_hash[hash], hash) {
-                if (tmp->parent == parent && !strcmp (tmp->name, name)) {
+                if (tmp->parent == parent && !strcasecmp (tmp->name, name)) {
                         dentry = tmp;
                         break;
                 }
@@ -773,6 +773,28 @@ inode_grep (inode_table_t *table, inode_t *parent, const char *name)
         pthread_mutex_unlock (&table->lock);
 
         return inode;
+}
+
+
+dentry_t  *
+inode_grep_dentry (inode_table_t *table, inode_t *parent, const char *name)
+{
+        dentry_t  *dentry = NULL;
+
+        if (!table || !parent || !name) {
+                gf_msg_callingfn (THIS->name, GF_LOG_WARNING, EINVAL,
+                                  LG_MSG_INVALID_ARG, "table || parent || name"
+                                  " not found");
+                return NULL;
+        }
+
+        pthread_mutex_lock (&table->lock);
+        {
+                dentry = __dentry_grep (table, parent, name);
+        }
+        pthread_mutex_unlock (&table->lock);
+
+        return dentry;
 }
 
 
@@ -816,6 +838,66 @@ inode_resolve (inode_table_t *table, char *path)
         GF_FREE (tmp);
 out:
         return inode;
+}
+
+
+char *
+inode_resolve_path (inode_table_t *table, const char *cpath)
+{
+        char    *tmp   = NULL, *bname = NULL, *str = NULL, *saveptr = NULL;
+        inode_t *inode = NULL, *parent = NULL;
+        dentry_t  *dentry = NULL;
+        char *fullpath = NULL, *p = NULL;
+
+        if ((cpath == NULL) || (table == NULL)) {
+                goto out;
+        }
+
+        fullpath = GF_CALLOC(1, strlen(cpath) + 1, gf_common_mt_strdup);
+        if (fullpath == NULL) {
+                goto out;
+        }
+
+        p = fullpath;
+        parent = inode_ref (table->root);
+        str = tmp = gf_strdup (cpath);
+
+        while (1) {
+                bname = strtok_r (str, "/", &saveptr);
+                if (bname == NULL) {
+                        break;
+                }
+
+                if (inode != NULL) {
+                        inode_unref (inode);
+                }
+
+                dentry = inode_grep_dentry (table, parent, bname);
+                if (dentry == NULL) {
+                        break;
+                }
+
+                strcpy(p++, "/");
+                strcpy(p, dentry->name);
+                p += strlen(dentry->name);
+
+                inode = dentry->inode;
+                if (inode == NULL) {
+                        break;
+                }
+
+                if (parent != NULL) {
+                        inode_unref (parent);
+                }
+
+                parent = inode_ref (inode);
+                str = NULL;
+        }
+
+        inode_unref (parent);
+        GF_FREE (tmp);
+out:
+        return fullpath;
 }
 
 
@@ -1876,6 +1958,66 @@ inode_from_path (inode_table_t *itable, const char *path)
                 }
 
                 component = next_component;
+        }
+
+        if (parent)
+                inode_unref (parent);
+
+        GF_FREE (pathname);
+
+out:
+        return inode;
+}
+
+inode_t *
+inode_from_path_2 (inode_table_t *itable, const char *path, int *count)
+{
+        inode_t  *inode = NULL;
+        inode_t  *parent = NULL;
+        inode_t  *root = NULL;
+        inode_t  *curr = NULL;
+        char     *pathname = NULL;
+        char     *component = NULL, *next_component = NULL;
+        char     *strtokptr = NULL;
+
+        if (!itable || !path)
+                return NULL;
+
+        /* top-down approach */
+        pathname = gf_strdup (path);
+        if (pathname == NULL) {
+                goto out;
+        }
+
+        root = itable->root;
+        parent = inode_ref (root);
+        component = strtok_r (pathname, "/", &strtokptr);
+        *count = 0;
+
+        if (component == NULL)
+                /* root inode */
+                inode = inode_ref (parent);
+
+        while (component) {
+                curr = inode_grep (itable, parent, component);
+
+                if (curr == NULL) {
+                        strtok_r (NULL, "/", &strtokptr);
+                        break;
+                }
+
+                next_component = strtok_r (NULL, "/", &strtokptr);
+
+                if (next_component) {
+                        inode_unref (parent);
+                        parent = curr;
+                        curr = NULL;
+                } else {
+                        inode = curr;
+                }
+
+                component = next_component;
+                (*count)++;
         }
 
         if (parent)

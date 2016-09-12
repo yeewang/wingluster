@@ -14,6 +14,7 @@
 #include "glusterfs-acl.h"
 #include "dokan-info.h"
 
+
 void
 dokan_lookup(xlator_t* this, ino_t parent, char* bname)
 {
@@ -491,6 +492,10 @@ dokan_readdirp(const char* path, void* buf, fuse_fill_dir_t filler,
         dokan_msg_t* msg = NULL;
         dokan_readdirp_t* params = NULL;
 
+        if (fi == NULL) {
+                return -1;
+        }
+
         msg = dokan_get_req(FUSE_READDIRPLUS, sizeof(dokan_readdirp_t));
         if (msg == NULL)
                 return -1;
@@ -848,6 +853,30 @@ dokan_destroy(void *data)
                data);
 }
 
+#ifdef _WIN32
+
+static uint32_t
+win_get_attributes(const char *fn)
+{
+
+}
+
+static int
+win_set_attributes(const char *fn, uint32_t attr)
+{
+
+}
+
+static int
+win_set_times(const char *fn, struct fuse_file_info *,
+        const FILETIME *create, const FILETIME *access,
+        const FILETIME *modified)
+{
+
+}
+
+#endif
+
 int
 dokan_send_result(xlator_t* this, dokan_msg_t* msg, int ret)
 {
@@ -1161,9 +1190,9 @@ struct fuse_operations dokan_operations = {
 
 #ifdef _WIN32
         /* these to support extented windows calls */
-        .win_get_attributes = NULL,
-        .win_set_attributes = NULL,
-        .win_set_times = NULL,
+        .win_get_attributes = win_get_attributes,
+        .win_set_attributes = win_set_attributes,
+        .win_set_times = win_set_times,
 #endif
 };
 

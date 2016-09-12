@@ -706,7 +706,6 @@ fuse_getattr_resume(fuse_state_t* state)
                 FUSE_FOP(state, fuse_attr_cbk, GF_FOP_STAT, stat, &state->loc,
                          state->xdata);
         } else {
-
                 gf_log("glusterfs-fuse", GF_LOG_TRACE, "FGETATTR (%s/%p)",
                        state->loc.path, state->fd);
 
@@ -1539,7 +1538,7 @@ fuse_unlink(xlator_t* this, dokan_msg_t* msg)
         fuse_state_t* state = NULL;
         char* name = NULL;
         char *path = NULL;
-        char *p = NULL;
+        char *gfpath = NULL, *bname = NULL;
 
         if (split_pathname(args->path, &path, &name) != 0) {
                 dokan_send_err(this, msg, ENOMEM);
@@ -1552,12 +1551,25 @@ fuse_unlink(xlator_t* this, dokan_msg_t* msg)
 
         state->stub = msg;
 
-        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, name);
+        gfpath = fuse_path_from_path(this, args->path, state->itable);
+        if (gfpath == NULL) {
+                dokan_send_err(this, msg, ENOENT);
+                GF_FREE(finh);
+                goto out;
+        }
 
-        GF_FREE(name);
-        GF_FREE(path);
+        bname = basename(gfpath);
+        if (*bname == '/')
+                bname++;
+
+        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, bname);
 
         fuse_resolve_and_resume(state, fuse_unlink_resume);
+
+out:
+        GF_FREE(name);
+        GF_FREE(path);
+        GF_FREE(gfpath);
 
         return;
 }
@@ -1591,6 +1603,7 @@ fuse_rmdir(xlator_t* this, dokan_msg_t* msg)
         fuse_state_t* state = NULL;
         char* name = NULL;
         char *path = NULL;
+        char *gfpath = NULL, *bname = NULL;
         int ret = -1;
 
         if (split_pathname(args->path, &path, &name) != 0) {
@@ -1604,12 +1617,25 @@ fuse_rmdir(xlator_t* this, dokan_msg_t* msg)
 
         state->stub = msg;
 
-        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, name);
+        gfpath = fuse_path_from_path(this, args->path, state->itable);
+        if (gfpath == NULL) {
+                dokan_send_err(this, msg, ENOENT);
+                GF_FREE(finh);
+                goto out;
+        }
 
-        GF_FREE(name);
-        GF_FREE(path);
+        bname = basename(gfpath);
+        if (*bname == '/')
+                bname++;
+
+        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, bname);
 
         fuse_resolve_and_resume(state, fuse_rmdir_resume);
+
+out:
+        GF_FREE(gfpath);
+        GF_FREE(name);
+        GF_FREE(path);
 
         return;
 }
@@ -1806,6 +1832,7 @@ fuse_rename(xlator_t* this, dokan_msg_t* msg)
         char* newname = NULL;
         char *newpath = NULL;
         inode_t *inode = NULL;
+        char *gfpath = NULL, *bname = NULL;
         int ret = -1;
 
         if (split_pathname(args->from, &path, &name) != 0) {
@@ -1834,13 +1861,26 @@ fuse_rename(xlator_t* this, dokan_msg_t* msg)
 
         state->stub = msg;
 
-        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, name);
+
+        gfpath = fuse_path_from_path(this, args->from, state->itable);
+        if (gfpath == NULL) {
+                dokan_send_err(this, msg, ENOENT);
+                GF_FREE(finh);
+                goto out;
+        }
+
+        bname = basename(gfpath);
+        if (*bname == '/')
+                bname++;
+
+        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, bname);
 
         fuse_resolve_entry_init(state, &state->resolve2, fri.newdir, newname);
 
         fuse_resolve_and_resume(state, fuse_rename_resume);
 
 out:
+        GF_FREE(gfpath);
         GF_FREE(name);
         GF_FREE(path);
         GF_FREE(newname);
@@ -1890,6 +1930,7 @@ fuse_link(xlator_t* this, dokan_msg_t* msg)
         char *newname = NULL;
         char *newpath = NULL;
         uint64_t newnodeid;
+        char *gfpath = NULL, *bname = NULL;
         int ret = -1;
 
         if (split_pathname(args->from, &oldpath, &oldname) != 0) {
@@ -1918,8 +1959,19 @@ fuse_link(xlator_t* this, dokan_msg_t* msg)
         newnodeid = inode_to_fuse_nodeid(inode);
         inode_unref(inode);
 
+        gfpath = fuse_path_from_path(this, args->from, state->itable);
+        if (gfpath == NULL) {
+                dokan_send_err(this, msg, ENOENT);
+                GF_FREE(finh);
+                goto out;
+        }
+
+        bname = basename(gfpath);
+        if (*bname == '/')
+                bname++;
+
         fuse_resolve_entry_init(state, &state->resolve2, finh->nodeid,
-                                oldname);
+                                bname);
 
         fuse_resolve_entry_init(state, &state->resolve, newnodeid,
                                 newname);
@@ -1927,6 +1979,7 @@ fuse_link(xlator_t* this, dokan_msg_t* msg)
         fuse_resolve_and_resume(state, fuse_link_resume);
 
 out:
+        GF_FREE(gfpath);
         GF_FREE(oldpath);
         GF_FREE(oldname);
         GF_FREE(newpath);
@@ -2814,6 +2867,7 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
         dokan_msg_t* stub = NULL;
         dokan_readdirp_t* rd_stub = NULL;
         int count = 0;
+        //dokan_directory_node *mapping;
 
         state = frame->root->state;
         finh = state->finh;
@@ -2861,6 +2915,8 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                 goto out;
         }
 
+        //mapping = fuse_generate_directory_node(this, rd_stub->path);
+
         size = 0;
         list_for_each_entry(entry, &entries->list, list)
         {
@@ -2888,6 +2944,8 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                                 inode_to_fuse_nodeid(state->fd->inode),
                                 entry->d_name);
                 }
+
+                //fuse_insert_mapping_node(entry ddd, mapping);
 
                 if (!entry->inode)
                         goto next_entry;
@@ -3120,10 +3178,12 @@ fuse_statfs_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                   0,
                 },
         };
+        dokan_statfs_t* args = NULL;
 
         state = frame->root->state;
         priv = this->private;
         finh = state->finh;
+        args = (dokan_statfs_t*)state->stub->args;
 
         fuse_log_eh(this, "op_ret: %d, op_errno: %d, %" PRIu64 ": %s()", op_ret,
                     op_errno, frame->root->unique,
@@ -3151,6 +3211,18 @@ fuse_statfs_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                 fso.st.files = buf->f_files;
                 fso.st.ffree = buf->f_ffree;
                 fso.st.namelen = buf->f_namemax;
+
+                args->stbuf->f_bsize = buf->f_bsize;
+                args->stbuf->f_frsize = buf->f_frsize;
+                args->stbuf->f_blocks = buf->f_blocks;
+                args->stbuf->f_bfree = buf->f_bfree;
+                args->stbuf->f_bavail = buf->f_bavail;
+                args->stbuf->f_files = buf->f_files;
+                args->stbuf->f_ffree = buf->f_ffree;
+                args->stbuf->f_favail = buf->f_favail;
+                args->stbuf->f_fsid = buf->f_fsid;
+                args->stbuf->f_flag = buf->f_flag;
+                args->stbuf->f_namemax = buf->f_namemax;
 
                 dokan_send_result(this, state->stub, 0);
         } else {
