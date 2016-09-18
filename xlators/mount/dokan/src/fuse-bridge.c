@@ -317,6 +317,10 @@ fuse_attr_cbk(call_frame_t* frame, void* cookie, xlator_t* this, int32_t op_ret,
                 fao.attr_valid_nsec =
                   calc_timeout_nsec(priv->attribute_timeout);
 
+                if (state->loc.inode) {
+                        memcpy(&state->loc.inode->iatt, buf, sizeof(*buf));
+                }
+
                 if (stub->type == FUSE_GETATTR)
                         gf_fuse_stat2winstat(buf, dd->stbuf);
                 else if (stub->type == FUSE_LOOKUP) {
@@ -720,12 +724,24 @@ fuse_getattr(xlator_t* this, dokan_msg_t* msg)
         dokan_getattr_t* args = (dokan_getattr_t*)msg->args;
         fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
+        inode_t *inode = NULL;
         int32_t ret = -1;
 
-        gf_log("glusterfs-fuse", GF_LOG_DEBUG, "fuse_getattr %s",
-                args->path);
-
         FILL_STATE(msg, this, finh, args->path, state);
+
+        inode = fuse_ino_to_inode(finh->nodeid, this);
+        if (finh->nodeid != 1 && inode->iatt.ia_ino == finh->nodeid) {
+#ifdef NEVER
+                gf_fuse_stat2winstat(args->stbuf, &inode->iatt);
+                dokan_send_result(this, msg, 0);
+                free_fuse_state(state);
+                return;
+#endif /* NEVER */
+        }
+        gf_log("glusterfs-fuse", GF_LOG_TRACE,
+                "fuse_getattr path: %s, inode: %p, %p\n", args->path, inode->iatt.ia_ino, finh->nodeid);
+
+        inode_unref(inode);
 
         state->stub = msg;
 
@@ -1411,6 +1427,7 @@ fuse_mknod(xlator_t* this, dokan_msg_t* msg)
 
         fmi.mode = args->mode;
         fmi.rdev = args->rdev;
+        fmi.umask = 0;
 
         FILL_STATE(msg, this, finh, path, state);
 
@@ -1487,6 +1504,7 @@ fuse_mkdir(xlator_t* this, dokan_msg_t* msg)
         }
 
         fmi.mode = args->mode;
+        fmi.umask = 0;
 
         FILL_STATE(msg, this, finh, path, state);
 
@@ -1554,7 +1572,7 @@ fuse_unlink(xlator_t* this, dokan_msg_t* msg)
         gfpath = fuse_path_from_path(this, args->path, state->itable);
         if (gfpath == NULL) {
                 dokan_send_err(this, msg, ENOENT);
-                GF_FREE(finh);
+                free_fuse_state(state);
                 goto out;
         }
 
@@ -1620,7 +1638,7 @@ fuse_rmdir(xlator_t* this, dokan_msg_t* msg)
         gfpath = fuse_path_from_path(this, args->path, state->itable);
         if (gfpath == NULL) {
                 dokan_send_err(this, msg, ENOENT);
-                GF_FREE(finh);
+                free_fuse_state(state);
                 goto out;
         }
 
@@ -1852,7 +1870,7 @@ fuse_rename(xlator_t* this, dokan_msg_t* msg)
         inode = fuse_inode_from_path(this, newpath, state->itable);
         if (inode == NULL) {
                 dokan_send_err(this, msg, ENOENT);
-                GF_FREE(finh);
+                free_fuse_state(state);
                 goto out;
         }
 
@@ -1865,7 +1883,7 @@ fuse_rename(xlator_t* this, dokan_msg_t* msg)
         gfpath = fuse_path_from_path(this, args->from, state->itable);
         if (gfpath == NULL) {
                 dokan_send_err(this, msg, ENOENT);
-                GF_FREE(finh);
+                free_fuse_state(state);
                 goto out;
         }
 
@@ -1953,6 +1971,7 @@ fuse_link(xlator_t* this, dokan_msg_t* msg)
         inode = fuse_inode_from_path(this, args->to, state->itable);
         if (inode == NULL) {
                 dokan_send_err(this, msg, ENOENT);
+                free_fuse_state(state);
                 goto out;
         }
 
@@ -1962,7 +1981,7 @@ fuse_link(xlator_t* this, dokan_msg_t* msg)
         gfpath = fuse_path_from_path(this, args->from, state->itable);
         if (gfpath == NULL) {
                 dokan_send_err(this, msg, ENOENT);
-                GF_FREE(finh);
+                free_fuse_state(state);
                 goto out;
         }
 
@@ -2867,7 +2886,6 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
         dokan_msg_t* stub = NULL;
         dokan_readdirp_t* rd_stub = NULL;
         int count = 0;
-        //dokan_directory_node *mapping;
 
         state = frame->root->state;
         finh = state->finh;
@@ -2915,8 +2933,6 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                 goto out;
         }
 
-        //mapping = fuse_generate_directory_node(this, rd_stub->path);
-
         size = 0;
         list_for_each_entry(entry, &entries->list, list)
         {
@@ -2944,8 +2960,6 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                                 inode_to_fuse_nodeid(state->fd->inode),
                                 entry->d_name);
                 }
-
-                //fuse_insert_mapping_node(entry ddd, mapping);
 
                 if (!entry->inode)
                         goto next_entry;
@@ -3346,6 +3360,7 @@ fuse_setxattr(xlator_t* this, dokan_msg_t* msg)
 
         if (fuse_ignore_xattr_set(priv, args->name)) {
                 (void)dokan_send_err(state->this, state->stub, 0);
+                free_fuse_state(state);
                 return;
         }
 
@@ -3353,7 +3368,7 @@ fuse_setxattr(xlator_t* this, dokan_msg_t* msg)
                 if ((strcmp(args->name, POSIX_ACL_ACCESS_XATTR) == 0) ||
                     (strcmp(args->name, POSIX_ACL_DEFAULT_XATTR) == 0)) {
                         dokan_send_err(state->this, state->stub, EOPNOTSUPP);
-                        GF_FREE(finh);
+                        free_fuse_state(state);
                         return;
                 }
         }
@@ -3361,7 +3376,7 @@ fuse_setxattr(xlator_t* this, dokan_msg_t* msg)
         ret = fuse_check_selinux_cap_xattr(priv, args->name);
         if (ret) {
                 dokan_send_err(state->this, state->stub, EOPNOTSUPP);
-                GF_FREE(finh);
+                free_fuse_state(state);
                 return;
         }
 
@@ -3370,7 +3385,7 @@ fuse_setxattr(xlator_t* this, dokan_msg_t* msg)
         ret = is_gf_log_command(this, args->name, args->value);
         if (ret >= 0) {
                 dokan_send_err(state->this, state->stub, ret);
-                GF_FREE(finh);
+                free_fuse_state(state);
                 return;
         }
 
@@ -3381,14 +3396,14 @@ fuse_setxattr(xlator_t* this, dokan_msg_t* msg)
 #if FUSE_KERNEL_MINOR_VERSION >= 11
                 fuse_invalidate_entry(this, finh->nodeid);
 #endif
-                GF_FREE(finh);
+                free_fuse_state(state);
                 return;
         }
 
         if (!strcmp(GFID_XATTR_KEY, args->name) ||
             !strcmp(GF_XATTR_VOL_ID_KEY, args->name)) {
                 dokan_send_err(state->this, state->stub, EPERM);
-                GF_FREE(finh);
+                free_fuse_state(state);
                 return;
         }
 
@@ -5297,27 +5312,47 @@ init(xlator_t* this_xl)
 
         if (stat(value_string, &stbuf) != 0) {
                 if (errno == ENOENT) {
-                        gf_log(this_xl->name, GF_LOG_ERROR,
-                               "%s %s does not exist", ZR_MOUNTPOINT_OPT,
-                               value_string);
-                } else if (errno == ENOTCONN) {
-                        gf_log(this_xl->name, GF_LOG_ERROR,
-                               "Mountpoint %s seems to have a stale "
-                               "mount, run 'umount %s' and try again.",
-                               value_string, value_string);
+                        const char *win_mount_path = NULL;
+                        int len = 0;
+
+                        win_mount_path = create_winpath_from_cygpath (value_string);
+                        if (win_mount_path == NULL) {
+                                goto cleanup_exit;
+                        }
+
+                        len = strlen(win_mount_path);
+                        if (win_mount_path[len - 1] == '\\') {
+                                len--;
+                        }
+
+                        if (!(len == 2 && win_mount_path[1] == ':')) {
+                                gf_log(this_xl->name, GF_LOG_WARNING,
+                                       "%s %s does not exist, try to create it %s", ZR_MOUNTPOINT_OPT,
+                                       value_string, win_mount_path);
+                                if (mkdir(value_string, 777) != 0) {
+                                       gf_log(this_xl->name, GF_LOG_WARNING,
+                                                "%s %s does not exist, failed to create it", ZR_MOUNTPOINT_OPT,
+                                                value_string);
+                                        goto cleanup_exit;
+                                }
+                        }
+
+                        free (win_mount_path);
                 } else {
-                        gf_log(this_xl->name, GF_LOG_DEBUG,
-                               "%s %s : stat returned %s", ZR_MOUNTPOINT_OPT,
-                               value_string, strerror(errno));
+                        if (errno == ENOTCONN) {
+                                gf_log(this_xl->name, GF_LOG_ERROR,
+                                       "Mountpoint %s seems to have a stale "
+                                       "mount, run 'umount %s' and try again.",
+                                       value_string, value_string);
+                        } else {
+                                gf_log(this_xl->name, GF_LOG_DEBUG,
+                                       "%s %s : stat returned %s", ZR_MOUNTPOINT_OPT,
+                                       value_string, strerror(errno));
+                        }
+                        goto cleanup_exit;
                 }
-                goto cleanup_exit;
         }
 
-        if (S_ISDIR(stbuf.st_mode) == 0) {
-                gf_log(this_xl->name, GF_LOG_ERROR, "%s %s is not a directory",
-                       ZR_MOUNTPOINT_OPT, value_string);
-                goto cleanup_exit;
-        }
         priv->mount_point = gf_strdup(value_string);
         if (!priv->mount_point) {
                 gf_log("glusterfs-fuse", GF_LOG_ERROR, "Out of memory");

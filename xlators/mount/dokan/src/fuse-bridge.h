@@ -243,7 +243,7 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                         inode = fuse_inode_from_path(this, path, state->itable);\
                         if (inode == NULL) {                                   \
                                 dokan_send_err(this, msg, ENOENT);             \
-                                GF_FREE(finh);                                 \
+                                free_fuse_state(state);                        \
                                                                                \
                                 return;                                        \
                         }                                                      \
@@ -490,5 +490,7 @@ char * fuse_path_from_path (xlator_t *this, const char *cpath,
         inode_table_t *itable);
 int split_pathname(char *pathname, char **path, char **basename);
 char * fuse_get_gf_path(xlator_t* this, const char *path);
+
+const char *create_winpath_from_cygpath(const char *cygpath);
 
 #endif /* _GF_FUSE_BRIDGE_H_ */
