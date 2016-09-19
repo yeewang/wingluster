@@ -35,6 +35,41 @@ dokan_lookup(xlator_t* this, ino_t parent, char* bname)
         dokan_send_req(msg);
 }
 
+void
+dokan_forget(uint64_t nodeid, uint64_t nlookup)
+{
+        dokan_msg_t* msg = NULL;
+        dokan_forget_t* params = NULL;
+
+        msg = dokan_get_req(FUSE_FORGET, sizeof(dokan_forget_t));
+        if (msg == NULL)
+                return;
+
+        params = (dokan_forget_t*)msg->args;
+        params->nodeid = nodeid;
+        params->nlookup = nlookup;
+
+        dokan_send_req(msg);
+}
+
+void
+dokan_batch_forget(dokan_forget_t *items, size_t count)
+{
+        dokan_msg_t* msg = NULL;
+        dokan_batch_forget_t* params = NULL;
+
+        msg = dokan_get_req(FUSE_BATCH_FORGET,
+                sizeof(dokan_batch_forget_t) + sizeof(dokan_forget_t) * count);
+        if (msg == NULL)
+                return;
+
+        params = (dokan_batch_forget_t *)msg->args;
+        params->count = count;
+        memcpy(params->items, items, sizeof(dokan_forget_t) * count);
+
+        dokan_send_req(msg);
+}
+
 static int
 dokan_getattr(const char* path, struct FUSE_STAT* stbuf)
 {

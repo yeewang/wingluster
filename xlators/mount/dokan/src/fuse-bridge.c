@@ -600,43 +600,45 @@ do_forget(xlator_t* this, uint64_t nodeid, uint64_t nlookup)
 }
 
 static void
-fuse_forget(xlator_t* this, fuse_in_header_t* finh, void* msg)
-
+fuse_forget(xlator_t* this, dokan_msg_t* msg)
 {
-        struct fuse_forget_in* ffi = msg;
+        dokan_forget_t* args = (dokan_forget_t*)msg->args;
+        fuse_in_header_t* finh = msg->finh;
 
-        if (finh->nodeid == 1) {
-                GF_FREE(finh);
+        if (args->nodeid == 1) {
+                GF_FREE (finh);
+                GF_FREE (msg);
                 return;
         }
 
         gf_log("glusterfs-fuse", GF_LOG_TRACE,
-               "%" PRIu64 ": FORGET %" PRIu64 "/%" PRIu64, finh->unique,
-               finh->nodeid, ffi->nlookup);
+               "%" PRIu64 ": FORGET %" PRIu64 "/%" PRIu64, msg->unique,
+               args->nodeid, args->nlookup);
 
-        do_forget(this, 1, ffi->nlookup);
+        do_forget(this, args->nodeid, args->nlookup);
 
-        GF_FREE(finh);
+        GF_FREE (finh);
+        GF_FREE (msg);
 }
 
 static void
 fuse_batch_forget(xlator_t* this, dokan_msg_t* msg)
 {
-        fuse_in_header_t* finh = msg->finh;
-        struct fuse_batch_forget_in* fbfi = msg;
-        struct fuse_forget_one* ffo = (struct fuse_forget_one*)(fbfi + 1);
+        dokan_batch_forget_t * args = (dokan_batch_forget_t *)msg->args;
+        fuse_in_header_t * finh = msg->finh;
         int i;
 
         gf_log("glusterfs-fuse", GF_LOG_TRACE,
                "%" PRIu64 ": BATCH_FORGET %" PRIu64 "/%" PRIu32, finh->unique,
-               finh->nodeid, fbfi->count);
+               finh->nodeid, args->count);
 
-        for (i = 0; i < fbfi->count; i++) {
-                if (ffo[i].nodeid == 1)
+        for (i = 0; i < args->count; i++) {
+                if (args->items[i].nodeid == 1)
                         continue;
-                do_forget(this, ffo[i].nodeid, ffo[i].nlookup);
+                do_forget(this, args->items[i].nodeid, args->items[i].nlookup);
         }
         GF_FREE(finh);
+        GF_FREE (msg);
 }
 
 static int
@@ -1851,7 +1853,6 @@ fuse_rename(xlator_t* this, dokan_msg_t* msg)
         char *newpath = NULL;
         inode_t *inode = NULL;
         char *gfpath = NULL, *bname = NULL;
-        int ret = -1;
 
         if (split_pathname(args->from, &path, &name) != 0) {
                 dokan_send_err(this, msg, ENOMEM);
@@ -1949,7 +1950,6 @@ fuse_link(xlator_t* this, dokan_msg_t* msg)
         char *newpath = NULL;
         uint64_t newnodeid;
         char *gfpath = NULL, *bname = NULL;
-        int ret = -1;
 
         if (split_pathname(args->from, &oldpath, &oldname) != 0) {
                 dokan_send_err(this, msg, ENOMEM);
@@ -4800,6 +4800,8 @@ static void
 fuse_waitmsg(xlator_t* this, dokan_msg_t* msg)
 {
         GF_ASSERT(0 && fuse_waitmsg);
+
+        gf_log(this->name, GF_LOG_DEBUG, "waitmsg unique: %d", msg->unique);
 }
 
 static void*
@@ -4839,17 +4841,17 @@ fuse_thread_proc(void* data)
                         while (list_empty(&priv->msg_list) ||
                                !list_empty(&priv->wait_list)) {
 
-#ifdef DEBUG
+#if 1//def DEBUG
                                 dokan_msg_t* tt;
                                 list_for_each_entry(tt, &priv->msg_list, list) {
                                         gf_log(this->name, GF_LOG_DEBUG,
-                                               "fuse remain message %p type: %d, unique: %lu",
+                                               "fuse requesting message %p type: %d, unique: %lu",
                                                tt, tt->type, tt->unique);
                                 }
 
                                 list_for_each_entry(tt, &priv->wait_list, list) {
                                         gf_log(this->name, GF_LOG_DEBUG,
-                                               "fuse wait message %p type: %d, unique: %lu",
+                                               "fuse processing message %p type: %d, unique: %lu",
                                                ((dokan_waitmsg_t *)tt->args)->msg,
                                                ((dokan_waitmsg_t *)tt->args)->msg->type,
                                                ((dokan_waitmsg_t *)tt->args)->msg->unique);
@@ -4857,7 +4859,7 @@ fuse_thread_proc(void* data)
 #endif /* DEBUG */
 
                                 ret = pthread_cond_wait(&priv->msg_cond,
-                                                            &priv->msg_mutex);
+                                                        &priv->msg_mutex);
                                 if (ret != 0) {
                                         gf_log(
                                           this->name, GF_LOG_DEBUG,
@@ -4872,7 +4874,9 @@ fuse_thread_proc(void* data)
                           list_first_entry(&priv->msg_list, dokan_msg_t, list);
                         list_del_init(&msg->list);
 
-                        if (msg->type != FUSE_AUTORELEASE) {
+                        if (msg->type != FUSE_AUTORELEASE &&
+                            msg->type != FUSE_FORGET &&
+                            msg->type != FUSE_BATCH_FORGET) {
                                 waitmsg = GF_CALLOC(1, sizeof(dokan_msg_t) +
                                         sizeof(dokan_waitmsg_t), gf_fuse_mt_dokan_msg_t);
                                 if (waitmsg == NULL) {
@@ -4893,9 +4897,11 @@ fuse_thread_proc(void* data)
                 }
                 pthread_mutex_unlock(&priv->msg_mutex);
 
+                dokan_opendir_t * args = (dokan_opendir_t *)msg->args;
+
                 gf_log(this->name, GF_LOG_DEBUG,
-                       "fuse recieved message type: %d, unique: %lu",
-                       msg->type, msg->unique);
+                       "fuse recieved message type: %d, unique: %lu, path: %s",
+                       msg->type, msg->unique, args->path);
 
                 priv->iobuf = iobuf;
 
@@ -5329,7 +5335,7 @@ init(xlator_t* this_xl)
                                 gf_log(this_xl->name, GF_LOG_WARNING,
                                        "%s %s does not exist, try to create it %s", ZR_MOUNTPOINT_OPT,
                                        value_string, win_mount_path);
-                                if (mkdir(value_string, 777) != 0) {
+                                if (mkdir(value_string, 0777) != 0) {
                                        gf_log(this_xl->name, GF_LOG_WARNING,
                                                 "%s %s does not exist, failed to create it", ZR_MOUNTPOINT_OPT,
                                                 value_string);
@@ -5527,27 +5533,6 @@ init(xlator_t* this_xl)
                 goto cleanup_exit;
         }
 
-        mnt_data = (struct mount_data*)MALLOC(sizeof(struct mount_data));
-        if (!mnt_data) {
-                gf_log("glusterfs-fuse", GF_LOG_ERROR, "Out of memory");
-                goto cleanup_exit;
-        }
-        mount_data_allocated = 1;
-        mnt_data->private = priv;
-        mnt_data->mountpoint = priv->mount_point;
-        mnt_data->fsname = fsname;
-        mnt_data->mountflags = mntflags;
-        mnt_data->mnt_param = mnt_args;
-        mnt_data->status_fd = priv->status_pipe[1];
-
-        ret = gf_thread_create(&priv->mount_thread, NULL, dokan_mount_proc,
-                mnt_data);
-        if (ret != 0) {
-                gf_log(this_xl->name, GF_LOG_DEBUG,
-                       "pthread_create() failed (%s)", strerror(errno));
-                goto cleanup_exit;
-        }
-
         event = eh_new(FUSE_EVENT_HISTORY_SIZE, _gf_false, NULL);
         if (!event) {
                 gf_log(this_xl->name, GF_LOG_ERROR,
@@ -5577,6 +5562,27 @@ init(xlator_t* this_xl)
         if (priv->fuse_dump_fd != -1) {
                 priv->fuse_ops0 = priv->fuse_ops;
                 priv->fuse_ops = fuse_dump_ops;
+        }
+
+        mnt_data = (struct mount_data*)MALLOC(sizeof(struct mount_data));
+        if (!mnt_data) {
+                gf_log("glusterfs-fuse", GF_LOG_ERROR, "Out of memory");
+                goto cleanup_exit;
+        }
+        mount_data_allocated = 1;
+        mnt_data->private = priv;
+        mnt_data->mountpoint = priv->mount_point;
+        mnt_data->fsname = fsname;
+        mnt_data->mountflags = mntflags;
+        mnt_data->mnt_param = mnt_args;
+        mnt_data->status_fd = priv->status_pipe[1];
+
+        ret = gf_thread_create(&priv->mount_thread, NULL, dokan_mount_proc,
+                mnt_data);
+        if (ret != 0) {
+                gf_log(this_xl->name, GF_LOG_DEBUG,
+                       "pthread_create() failed (%s)", strerror(errno));
+                goto cleanup_exit;
         }
 
         return 0;

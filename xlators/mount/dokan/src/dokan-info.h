@@ -104,6 +104,10 @@ typedef struct
         off_t offset;
         struct fuse_file_info* fi;
 
+        pthread_cond_t  cond;
+        pthread_mutex_t mutex;
+        struct list_head list;
+
         char* out_buf;
         size_t out_size;
 } dokan_readdirp_t;
@@ -174,6 +178,18 @@ typedef struct
         ino_t parent;
         const char* basename;
 } dokan_lookup_t;
+
+typedef struct
+{
+        ino_t nodeid;
+        uint64_t nlookup;
+} dokan_forget_t;
+
+typedef struct
+{
+        size_t count;
+        dokan_forget_t items[];
+} dokan_batch_forget_t;
 
 typedef struct
 {

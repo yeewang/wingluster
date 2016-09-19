@@ -12,7 +12,7 @@
 
 
 /* Conversion from cygwin path to windows path */
-static const char *
+const char *
 create_winpath_from_cygpath(const char *cygpath)
 {
         const char *winpath;
@@ -38,15 +38,19 @@ fuse_mount_sys (const char *mountpoint, char *fsname,
         struct fuse *fuse;
         char *mnt_point;
         int multithreaded;
-
         int argc = 7;
         char *argv[12];
+        char *volname;
+
+        if (asprintf(&volname, "volname=%s", fsname) == -1)
+                return NULL;
+
         argv[0] = "dokan";
         argv[1] = "-o";
-        argv[2] = "volname=gluster";
+        argv[2] = volname;
         argv[3] = "-o";
-        argv[4] = "fsname=glusterfs";
-        argv[5] = "-d"; //"-f";
+        argv[4] = "fsname=GlusterFS";
+        argv[5] = "-d";
         argv[6] = mountpoint;
         argv[7] = NULL;
 
@@ -57,6 +61,7 @@ fuse_mount_sys (const char *mountpoint, char *fsname,
                           NULL);
         if (fuse == NULL) {
                 GFFUSE_LOGERR("ret = 1\n");
+                free(volname);
                 return NULL;
         }
 
@@ -70,8 +75,11 @@ fuse_mount_sys (const char *mountpoint, char *fsname,
 
         if (res < 0) {
                 GFFUSE_LOGERR("ret = %d\n", res);
+                free(volname);
                 return NULL;
         }
+
+        free(volname);
 
         return fuse;
 }
