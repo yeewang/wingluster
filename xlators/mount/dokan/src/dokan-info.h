@@ -98,6 +98,13 @@ typedef struct
 
 typedef struct
 {
+        struct list_head list;
+        size_t off;
+        size_t size;
+} dokan_readdirp_item_t;
+
+typedef struct
+{
         const char* path;
         void* buf;
         fuse_fill_dir_t filler;

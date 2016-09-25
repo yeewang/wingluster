@@ -104,7 +104,7 @@ get_fuse_state (xlator_t *this, fuse_in_header_t *finh)
         if (!state)
                 return NULL;
 
-	state->this = THIS;
+	state->this = get_fuse_xlator();
         priv = this->private;
 
         pthread_mutex_lock (&priv->sync_mutex);

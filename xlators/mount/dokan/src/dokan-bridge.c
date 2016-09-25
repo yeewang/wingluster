@@ -526,6 +526,9 @@ dokan_readdirp(const char* path, void* buf, fuse_fill_dir_t filler,
         int ret = -1;
         dokan_msg_t* msg = NULL;
         dokan_readdirp_t* params = NULL;
+        dokan_readdirp_item_t *part = NULL;
+        size_t size = 0;
+        int end = 0;
 
         if (fi == NULL) {
                 return -1;
@@ -544,12 +547,67 @@ dokan_readdirp(const char* path, void* buf, fuse_fill_dir_t filler,
         params->out_buf = NULL;
         params->out_size = 0;
 
+        INIT_LIST_HEAD(&params->list);
+        pthread_cond_init(&params->cond, NULL);
+        pthread_mutex_init(&params->mutex, NULL);
+
         dokan_send_req(msg);
+
+        while (!end && 0) {
+                part = NULL;
+                pthread_mutex_lock(&params->mutex);
+                {
+                        while (!end && list_empty(&params->list)) {
+                                ret = pthread_cond_wait(&params->cond, &params->mutex);
+                                if (ret != 0) {
+                                        gf_log(
+                                          "glusterfs-fuse", GF_LOG_DEBUG,
+                                          "timedwait returned non zero value "
+                                          "ret: %d errno: %d",
+                                          ret, errno);
+                                        break;
+                                }
+                        }
+
+                        if (!end) {
+                                part = list_first_entry(&params->list, dokan_readdirp_item_t, list);
+                                list_del_init(&part->list);
+                        }
+                }
+                pthread_mutex_unlock(&params->mutex);
+
+                if (end)
+                        break;
+
+                if (part != NULL && filler) {
+                        struct fuse_direntplus* fde = NULL;
+                        struct fuse_entry_out* feo = NULL;
+                        struct FUSE_STAT stbuf;
+
+                        while (size < part->off) {
+                                fde = (struct fuse_direntplus*)(params->out_buf + size);
+                                feo = &fde->entry_out;
+
+                                memset(&stbuf, 0, sizeof(struct FUSE_STAT));
+                                gf_fuse_dirent2winstat(&fde->dirent, &stbuf);
+                                if (filler(buf, fde->dirent.name, &stbuf, 0)) {
+                                        break;
+                                }
+
+                                size += FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS +
+                                                          fde->dirent.namelen + 1);
+                        }
+
+                        if (part->off == part->size)
+                                end = 1;
+
+                        GF_FREE(part);
+                }
+        }
 
         ret = dokan_get_result(msg);
 
-        if (ret == 0 && params->out_size > 0 && filler) {
-                size_t size = 0;
+        if (ret == 0 && params->out_size > size && filler) {
                 struct fuse_direntplus* fde = NULL;
                 struct fuse_entry_out* feo = NULL;
                 struct FUSE_STAT stbuf;
@@ -567,9 +625,10 @@ dokan_readdirp(const char* path, void* buf, fuse_fill_dir_t filler,
                         size += FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS +
                                                   fde->dirent.namelen + 1);
                 }
-
-                GF_FREE(params->out_buf);
         }
+
+        if (params->out_buf != NULL)
+                GF_FREE(params->out_buf);
 
         dokan_cleanup_req(msg);
 
@@ -615,7 +674,6 @@ dokan_ftruncate(const char *path, FUSE_OFF_T size, struct fuse_file_info *fi)
 
         return dokan_get_result_and_cleanup(msg);
 }
-
 
 int
 dokan_releasedir(const char* path, struct fuse_file_info* fi)

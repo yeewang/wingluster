@@ -141,7 +141,6 @@ out:
         return fdctx;
 }
 
-#if FUSE_KERNEL_MINOR_VERSION >= 11
 static void
 fuse_invalidate_entry(xlator_t* this, uint64_t fuse_ino)
 {
@@ -211,7 +210,6 @@ fuse_invalidate_entry(xlator_t* this, uint64_t fuse_ino)
         if (inode)
                 inode_unref(inode);
 }
-#endif
 
 /*
  * Send an inval inode notification to fuse. This causes an invalidation of the
@@ -220,7 +218,6 @@ fuse_invalidate_entry(xlator_t* this, uint64_t fuse_ino)
 static void
 fuse_invalidate_inode(xlator_t* this, uint64_t fuse_ino)
 {
-#if FUSE_KERNEL_MINOR_VERSION >= 11
         struct fuse_out_header* fouh = NULL;
         struct fuse_notify_inval_inode_out* fniio = NULL;
         fuse_private_t* priv = NULL;
@@ -272,11 +269,6 @@ fuse_invalidate_inode(xlator_t* this, uint64_t fuse_ino)
 
         if (inode)
                 inode_unref(inode);
-#else
-        gf_log("glusterfs-fuse", GF_LOG_WARNING, "fuse_invalidate_inode not "
-                                                 "implemented on OS X due to "
-                                                 "missing FUSE notification");
-#endif
 }
 
 static int
@@ -2623,12 +2615,9 @@ fuse_fsync(xlator_t* this, dokan_msg_t* msg)
         dokan_fsync_t* args = (dokan_fsync_t*)msg->args;
         fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
-
         fd_t* fd = NULL;
-#if FUSE_KERNEL_MINOR_VERSION >= 9
         fuse_private_t* priv = NULL;
         priv = this->private;
-#endif
 
         FILL_STATE(msg, this, finh, args->path, state);
         state->stub = msg;
@@ -2933,6 +2922,8 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                 goto out;
         }
 
+        rd_stub->out_buf = buf;
+
         size = 0;
         list_for_each_entry(entry, &entries->list, list)
         {
@@ -2991,12 +2982,51 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
 
         next_entry:
 
+                /* Make a callback to filter */
+                pthread_mutex_lock(&rd_stub->mutex);
+                {
+                        dokan_readdirp_item_t *msg =
+                                (dokan_readdirp_item_t *) GF_CALLOC(1, sizeof(dokan_readdirp_item_t), gf_fuse_mt_char);
+                        if (msg == NULL) {
+                                gf_log("glusterfs-fuse", GF_LOG_DEBUG,
+                                        "%" PRIu64 ": READDIRP => -1 (%s)", frame->root->unique,
+                                        strerror(ENOMEM));
+
+                                pthread_cond_broadcast(&rd_stub->cond);
+
+                                pthread_mutex_unlock(&rd_stub->mutex);
+
+                                dokan_send_err(this, stub, ENOMEM);
+                                goto out;
+                        }
+
+                        msg->off = size;
+                        msg->size = max_size;
+
+                        list_add_tail(&msg->list, &rd_stub->list);
+
+                        if (count % 10 == 0) {
+                                pthread_cond_broadcast(&rd_stub->cond);
+                        }
+                }
+                pthread_mutex_unlock(&rd_stub->mutex);
+
+                count++;
+
                 if (size == max_size)
                         break;
         }
 
-        rd_stub->out_buf = buf;
         rd_stub->out_size = max_size;
+
+        if (count % 10) {
+                pthread_mutex_lock(&rd_stub->mutex);
+                {
+                        pthread_cond_broadcast(&rd_stub->cond);
+                }
+                pthread_mutex_unlock(&rd_stub->mutex);
+        }
+
         dokan_send_result(this, stub, 0);
 out:
         free_fuse_state(state);
@@ -3022,17 +3052,12 @@ fuse_readdirp(xlator_t* this, dokan_msg_t* msg)
         dokan_readdirp_t* args = (dokan_readdirp_t*)msg->args;
         fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
-        inode_t* inode = NULL;
         fd_t* fd = NULL;
 
         FILL_STATE(msg, this, finh, args->path, state);
         state->stub = msg;
 
-        inode = fuse_ino_to_inode(finh->nodeid, this);
-
-        fd = fd_lookup(inode, state->finh->pid);
-
-        inode_unref(inode);
+        fd = FH_TO_FD(args->fi->fh);
 
         state->size = 64 * 1024 * 1024; /* assume bufsize is 64MB */
         state->off = args->offset;
@@ -3080,24 +3105,18 @@ fuse_fallocate(xlator_t* this, dokan_msg_t* msg)
                 FILL_STATE(msg, this, finh, NULL, state);
 
                 state->stub = msg;
-                state->off = 0;
-                state->size = args->size;
+                state->off = args->size;
+                state->size = 0;
                 state->flags = args->fi->flags;
                 state->fd = FH_TO_FD(args->fi->fh);
 
                 fuse_resolve_fd_init(state, &state->resolve, state->fd);
+
+                fuse_resolve_and_resume(state, fuse_fallocate_resume);
         }
         else {
-                FILL_STATE(msg, this, finh, args->path, state);
-
-                state->stub = msg;
-                state->off = 0;
-                state->size = args->size;
-
-                fuse_resolve_inode_init(state, &state->resolve, finh->nodeid);
+                dokan_send_err(this, msg, EINVAL);
         }
-
-        fuse_resolve_and_resume(state, fuse_fallocate_resume);
 }
 
 static void
@@ -3393,9 +3412,9 @@ fuse_setxattr(xlator_t* this, dokan_msg_t* msg)
                 gf_log("fuse", GF_LOG_TRACE,
                        "got request to invalidate %" PRIu64, finh->nodeid);
                 dokan_send_err(state->this, state->stub, 0);
-#if FUSE_KERNEL_MINOR_VERSION >= 11
+
                 fuse_invalidate_entry(this, finh->nodeid);
-#endif
+
                 free_fuse_state(state);
                 return;
         }
@@ -3485,7 +3504,7 @@ static int
 fuse_filter_xattr(char* key)
 {
         int need_filter = 0;
-        struct fuse_private* priv = THIS->private;
+        struct fuse_private* priv = get_fuse_xlator()->private;
 
         if ((priv->client_pid == GF_CLIENT_PID_GSYNCD) &&
             fnmatch("*.selinux*", key, FNM_PERIOD) == 0)
@@ -3549,7 +3568,7 @@ fuse_xattr_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                         len_next =
                           dict_keys_join(value, len, dict, fuse_filter_xattr);
                         if (len_next != len)
-                                gf_log(THIS->name, GF_LOG_ERROR,
+                                gf_log(get_fuse_xlator()->name, GF_LOG_ERROR,
                                        "sizes not equal %d != %d", len,
                                        len_next);
 
@@ -3622,7 +3641,7 @@ fuse_getxattr_resume(fuse_state_t* state)
                 }
                 memcpy(value, state->loc.inode->gfid, 16);
 
-                send_fuse_xattr(THIS, state->finh, value, 16, state->size);
+                send_fuse_xattr(get_fuse_xlator(), state->finh, value, 16, state->size);
                 GF_FREE(value);
         internal_out:
                 free_fuse_state(state);
@@ -3641,7 +3660,7 @@ fuse_getxattr_resume(fuse_state_t* state)
                 }
                 uuid_utoa_r(state->loc.inode->gfid, value);
 
-                send_fuse_xattr(THIS, state->finh, value,
+                send_fuse_xattr(get_fuse_xlator(), state->finh, value,
                                 UUID_CANONICAL_FORM_LEN, state->size);
                 GF_FREE(value);
         internal_out1:
@@ -4052,6 +4071,53 @@ fuse_setlk(xlator_t* this, dokan_msg_t* msg)
         return;
 }
 
+static void *
+notify_kernel_loop (void *data)
+{
+        uint32_t                 len = 0;
+        ssize_t                   rv = 0;
+        xlator_t               *this = NULL;
+        fuse_private_t         *priv = NULL;
+        fuse_invalidate_node_t *node = NULL;
+        fuse_invalidate_node_t  *tmp = NULL;
+
+        this = data;
+        priv = this->private;
+
+        for (;;) {
+                pthread_mutex_lock (&priv->invalidate_mutex);
+                {
+                        while (list_empty (&priv->invalidate_list))
+                                pthread_cond_wait (&priv->invalidate_cond,
+                                                   &priv->invalidate_mutex);
+
+                        node = list_entry (priv->invalidate_list.next,
+                                           fuse_invalidate_node_t, next);
+
+                        list_del_init (&node->next);
+                }
+                pthread_mutex_unlock (&priv->invalidate_mutex);
+
+                GF_FREE (node);
+        }
+
+        gf_log ("glusterfs-fuse", GF_LOG_ERROR,
+                "kernel notifier loop terminated");
+
+        pthread_mutex_lock (&priv->invalidate_mutex);
+        {
+                priv->reverse_fuse_thread_started = _gf_false;
+                list_for_each_entry_safe (node, tmp, &priv->invalidate_list,
+                                          next) {
+                        list_del_init (&node->next);
+                        GF_FREE (node);
+                }
+        }
+        pthread_mutex_unlock (&priv->invalidate_mutex);
+
+        return NULL;
+}
+
 static void
 fuse_init (xlator_t* this, dokan_msg_t* msg)
 {
@@ -4059,6 +4125,7 @@ fuse_init (xlator_t* this, dokan_msg_t* msg)
         struct fuse_conn_info* conn = args->conn;
         fuse_private_t* priv = NULL;
         int ret = 0;
+        pthread_t messenger;
 
         priv = this->private;
 
@@ -4073,19 +4140,16 @@ fuse_init (xlator_t* this, dokan_msg_t* msg)
         priv->init_recvd = 1;
         priv->proto_minor = conn->proto_minor;
 
-/* Used for 'reverse invalidation of inode' */
-#ifdef NEVER
+        /* Used for 'reverse invalidation of inode' */
         ret = gf_thread_create(&messenger, NULL, notify_kernel_loop, this);
         if (ret != 0) {
                 gf_log("glusterfs-fuse", GF_LOG_ERROR,
                        "failed to start messenger daemon (%s)",
                        strerror(errno));
-
-                close(priv->fd);
-                goto out;
+                dokan_send_err(this, msg, -1);
+                return;
         }
         priv->reverse_fuse_thread_started = _gf_true;
-#endif /* NEVER */
 
         gf_log("glusterfs-fuse", GF_LOG_INFO,
                "FUSE inited with protocol versions:"
@@ -4093,7 +4157,7 @@ fuse_init (xlator_t* this, dokan_msg_t* msg)
                FUSE_KERNEL_VERSION, FUSE_KERNEL_MINOR_VERSION,
                conn->proto_major, conn->proto_minor);
 
-        dokan_send_err(this, msg, 0);
+        dokan_send_result(this, msg, 0);
         return;
 }
 
@@ -4845,13 +4909,13 @@ fuse_thread_proc(void* data)
                                 dokan_msg_t* tt;
                                 list_for_each_entry(tt, &priv->msg_list, list) {
                                         gf_log(this->name, GF_LOG_DEBUG,
-                                               "fuse requesting message %p type: %d, unique: %lu",
+                                               "fuse is requesting message %p type: %d, unique: %lu",
                                                tt, tt->type, tt->unique);
                                 }
 
                                 list_for_each_entry(tt, &priv->wait_list, list) {
                                         gf_log(this->name, GF_LOG_DEBUG,
-                                               "fuse processing message %p type: %d, unique: %lu",
+                                               "fuse is processing message %p type: %d, unique: %lu",
                                                ((dokan_waitmsg_t *)tt->args)->msg,
                                                ((dokan_waitmsg_t *)tt->args)->msg->type,
                                                ((dokan_waitmsg_t *)tt->args)->msg->unique);
@@ -5111,8 +5175,7 @@ notify(xlator_t* this, int32_t event, void* data, ...)
                             (event == GF_EVENT_CHILD_DOWN)) {
                                 pthread_mutex_lock(&private->sync_mutex);
                                 {
-                                      private
-                                        ->event_recvd = 1;
+                                        private->event_recvd = 1;
                                         pthread_cond_broadcast(
                                           &private->sync_cond);
                                 }
@@ -5122,14 +5185,16 @@ notify(xlator_t* this, int32_t event, void* data, ...)
                         pthread_mutex_lock(&private->sync_mutex);
                         {
                                 if (!private->fuse_thread_started) {
-                                      private
-                                        ->fuse_thread_started = 1;
+                                        private->fuse_thread_started = 1;
                                         start_thread = _gf_true;
                                 }
                         }
                         pthread_mutex_unlock(&private->sync_mutex);
 
                         if (start_thread) {
+                                int policy;
+                                struct sched_param param;
+
                                 ret =
                                   gf_thread_create(&private->fuse_thread, NULL,
                                                    fuse_thread_proc, this);
@@ -5139,6 +5204,13 @@ notify(xlator_t* this, int32_t event, void* data, ...)
                                                strerror(errno));
                                         break;
                                 }
+
+                                pthread_getschedparam(private->fuse_thread, &policy, &param);
+
+#ifdef NEVER
+                                param.sched_priority = 1;
+                                pthread_setschedparam(private->fuse_thread, SCHED_FIFO, param.sched_priority);
+#endif /* NEVER */
                         }
 
                         break;
