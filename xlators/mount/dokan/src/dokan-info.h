@@ -202,15 +202,8 @@ typedef struct
 {
         const char *path;
         FUSE_OFF_T size;
-} dokan_truncate_t;
-
-typedef struct
-{
-        const char *path;
-        FUSE_OFF_T size;
         struct fuse_file_info *fi;
-} dokan_ftruncate_t;
-
+} dokan_fallocate_t;
 
 typedef struct
 {
@@ -223,6 +216,10 @@ typedef struct
 
         uid_t uid;
         gid_t gid;
+
+        FUSE_OFF_T off;
+
+        struct fuse_file_info *fi;
 } dokan_setattr_t;
 
 typedef struct

@@ -1074,12 +1074,23 @@ fuse_setattr(xlator_t* this, dokan_msg_t* msg)
         fuse_private_t* priv = NULL;
         fuse_state_t* state = NULL;
 
-        FILL_STATE(msg, this, finh, args->path, state);
 
-        state->stub = msg;
+        if (args->fi) {
+                FILL_STATE(msg, this, finh, NULL, state);
 
-        fuse_resolve_inode_init(state, &state->resolve,
-                                finh->nodeid);
+                state->stub = msg;
+                state->fd = FH_TO_FD(args->fi->fh);
+
+                fuse_resolve_fd_init(state, &state->resolve, state->fd);
+        }
+        else {
+                FILL_STATE(msg, this, finh, args->path, state);
+
+                state->stub = msg;
+
+                fuse_resolve_inode_init(state, &state->resolve,
+                                        finh->nodeid);
+        }
 
         priv = this->private;
 
@@ -1099,6 +1110,10 @@ fuse_setattr(xlator_t* this, dokan_msg_t* msg)
 
         if (args->valid & (FATTR_MODE)) {
                 state->attr.ia_prot = ia_prot_from_st_mode(args->mode);
+        }
+
+        if (args->valid & (FATTR_SIZE)) {
+                state->off = args->off;
         }
 
         fuse_resolve_and_resume(state, fuse_setattr_resume);
@@ -3097,7 +3112,7 @@ fuse_fallocate_resume(fuse_state_t* state)
 static void
 fuse_fallocate(xlator_t* this, dokan_msg_t* msg)
 {
-        dokan_ftruncate_t *args = (dokan_ftruncate_t *)msg->args;
+        dokan_fallocate_t *args = (dokan_fallocate_t *)msg->args;
         fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
 
@@ -3106,7 +3121,6 @@ fuse_fallocate(xlator_t* this, dokan_msg_t* msg)
 
                 state->stub = msg;
                 state->off = args->size;
-                state->size = 0;
                 state->flags = args->fi->flags;
                 state->fd = FH_TO_FD(args->fi->fh);
 
@@ -4905,7 +4919,7 @@ fuse_thread_proc(void* data)
                         while (list_empty(&priv->msg_list) ||
                                !list_empty(&priv->wait_list)) {
 
-#if 1//def DEBUG
+#ifdef DEBUG
                                 dokan_msg_t* tt;
                                 list_for_each_entry(tt, &priv->msg_list, list) {
                                         gf_log(this->name, GF_LOG_DEBUG,

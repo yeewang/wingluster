@@ -639,15 +639,16 @@ static int
 dokan_truncate(const char* path, off_t size)
 {
         dokan_msg_t* msg = NULL;
-        dokan_ftruncate_t* params = NULL;
+        dokan_setattr_t* params = NULL;
 
-        msg = dokan_get_req(FUSE_FALLOCATE, sizeof(dokan_ftruncate_t));
+        msg = dokan_get_req(FUSE_SETATTR, sizeof(dokan_setattr_t));
         if (msg == NULL)
                 return -1;
 
-        params = (dokan_ftruncate_t*)msg->args;
+        params = (dokan_setattr_t*)msg->args;
         params->path = path;
-        params->size = size;
+        params->valid = (FATTR_SIZE);
+        params->off = size;
         params->fi = NULL;
 
         dokan_send_req(msg);
@@ -659,16 +660,17 @@ static int
 dokan_ftruncate(const char *path, FUSE_OFF_T size, struct fuse_file_info *fi)
 {
         dokan_msg_t* msg = NULL;
-        dokan_ftruncate_t* params = NULL;
+        dokan_setattr_t* params = NULL;
 
-        msg = dokan_get_req(FUSE_FALLOCATE, sizeof(dokan_ftruncate_t));
+        msg = dokan_get_req(FUSE_SETATTR, sizeof(dokan_setattr_t));
         if (msg == NULL)
                 return -1;
 
-        params = (dokan_ftruncate_t*)msg->args;
-        params->path = path;
-        params->size = size;
+        params = (dokan_setattr_t*)msg->args;
         params->fi = fi;
+        params->path = path;
+        params->valid = (FATTR_SIZE);
+        params->off = size;
 
         dokan_send_req(msg);
 
@@ -855,6 +857,7 @@ dokan_chmod(const char* path, mode_t mode)
         params->path = path;
         params->valid = (FATTR_MODE);
         params->mode = mode;
+        params->fi = NULL;
 
         dokan_send_req(msg);
 
@@ -876,6 +879,7 @@ dokan_chown(const char* path, uid_t uid, gid_t gid)
         params->valid = (FATTR_UID | FATTR_GID);
         params->uid = uid;
         params->gid = gid;
+        params->fi = NULL;
 
         dokan_send_req(msg);
 
@@ -894,6 +898,7 @@ dokan_utimens(const char *path, const struct timespec ts[2])
                 return -1;
 
         params = (dokan_setattr_t*)msg->args;
+        params->fi = NULL;
         params->path = path;
         params->valid = (FATTR_ATIME | FATTR_MTIME);
 
@@ -1023,9 +1028,11 @@ dokan_send_result(xlator_t* this, dokan_msg_t* msg, int ret)
 
                                 inner_msg = ((dokan_waitmsg_t*)wait_msg->args)->msg;
 
+                                /*
                                 gf_log(this->name, GF_LOG_DEBUG,
                                        "fuse try to clean message %p type: %d, unique: %lu",
                                         inner_msg, inner_msg->type, inner_msg->unique);
+                                */
 
                                 if (inner_msg->unique == msg->unique) {
                                         list_del_init(&wait_msg->list);
