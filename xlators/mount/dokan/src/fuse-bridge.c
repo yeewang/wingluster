@@ -1074,7 +1074,6 @@ fuse_setattr(xlator_t* this, dokan_msg_t* msg)
         fuse_private_t* priv = NULL;
         fuse_state_t* state = NULL;
 
-
         if (args->fi) {
                 FILL_STATE(msg, this, finh, NULL, state);
 
@@ -3121,7 +3120,7 @@ fuse_fallocate(xlator_t* this, dokan_msg_t* msg)
 
                 state->stub = msg;
                 state->off = args->size;
-                state->flags = args->fi->flags;
+                state->flags = FALLOC_FL_KEEP_SIZE;
                 state->fd = FH_TO_FD(args->fi->fh);
 
                 fuse_resolve_fd_init(state, &state->resolve, state->fd);

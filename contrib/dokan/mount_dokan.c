@@ -15,9 +15,10 @@
 const char *
 create_winpath_from_cygpath(const char *cygpath)
 {
-        const char *winpath;
+        const char *winpath = NULL;
+
         winpath = (const char *)cygwin_create_path (
-                CCP_POSIX_TO_WIN_A | CCP_ABSOLUTE, cygpath);
+                        CCP_POSIX_TO_WIN_A | CCP_ABSOLUTE, cygpath);
         return winpath;
 }
 
@@ -38,7 +39,7 @@ fuse_mount_sys (const char *mountpoint, char *fsname,
         struct fuse *fuse;
         char *mnt_point;
         int multithreaded;
-        int argc = 7;
+        int argc = 8;
         char *argv[12];
         char *volname;
 
@@ -49,10 +50,11 @@ fuse_mount_sys (const char *mountpoint, char *fsname,
         argv[1] = "-o";
         argv[2] = volname;
         argv[3] = "-o";
-        argv[4] = "fsname=GlusterFS";
-        argv[5] = "-d";
-        argv[6] = mountpoint;
-        argv[7] = NULL;
+        argv[4] = "fsname=StorSwift FS";
+        argv[5] = "-n";
+        argv[6] = "-f";
+        argv[7] = mountpoint;
+        argv[8] = NULL;
 
         umask(0);
 

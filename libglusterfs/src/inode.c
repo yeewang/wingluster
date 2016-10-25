@@ -608,6 +608,8 @@ __inode_create (inode_table_t *table)
         }
 
         newi->table = table;
+        newi->iatt.ia_ino = 0;
+        newi->iatt.ia_type = IA_INVAL;
 
         LOCK_INIT (&newi->lock);
 
@@ -1070,6 +1072,7 @@ __inode_link (inode_t *inode, inode_t *parent, const char *name,
                 } else {
                         gf_uuid_copy (inode->gfid, iatt->ia_gfid);
                         inode->ia_type    = iatt->ia_type;
+                        memcpy(&inode->iatt, iatt, sizeof(*iatt));
                         __inode_hash (inode);
                 }
         } else {
