@@ -5025,8 +5025,7 @@ fuse_priv_dump(xlator_t* this)
         if (!this)
                 return -1;
 
-      private
-        = this->private;
+        private = this->private;
 
         if (!private)
                 return -1;
