@@ -69,6 +69,11 @@ AC_CONFIG_FILES([Makefile
                 xlators/mount/dokan/utils/mount.glusterfs
                 xlators/mount/dokan/utils/mount_glusterfs
                 xlators/mount/dokan/utils/Makefile
+			    xlators/mount/winfsp/Makefile
+                xlators/mount/winfsp/src/Makefile
+                xlators/mount/winfsp/utils/mount.glusterfs
+                xlators/mount/winfsp/utils/mount_glusterfs
+                xlators/mount/winfsp/utils/Makefile
                 xlators/storage/Makefile
                 xlators/storage/posix/Makefile
                 xlators/storage/posix/src/Makefile
@@ -1104,7 +1109,7 @@ case $host_os in
         GF_HOST_OS="GF_CYGWIN_HOST_OS"
         GF_FUSE_CFLAGS="-DFUSERMOUNT_DIR=\\\"\$(bindir)\\\""
 		BUILD_FUSE_CLIENT=yes
-        FUSE_CLIENT_SUBDIR="dokan"
+        FUSE_CLIENT_SUBDIR="winfsp"
         GLUSTERD_WORKDIR="${LOCALSTATEDIR}/lib/glusterd"
         GF_CFLAGS="${GF_CFLAGS} -I/usr/include/tirpc -I/usr/include/libxml2/libxml"
         GF_LDFLAGS="${GF_LDFLAGS} -no-undefined"
