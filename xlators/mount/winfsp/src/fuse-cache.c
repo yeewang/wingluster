@@ -252,7 +252,7 @@ uint64_t cache_get_write_ctr(void)
 static int cache_getattr(const char *path, struct stat *stbuf)
 {
 	int err = cache_get_attr(path, stbuf);
-	if (err) {
+	if (err || stbuf->st_size == 0) { // BUGBUG: gluster bug
 		uint64_t wrctr = cache_get_write_ctr();
 		err = cache.next_oper->oper.getattr(path, stbuf);
 		if (!err)
@@ -303,7 +303,7 @@ static int cache_dirfill(fuse_cache_dirh_t ch, const char *name,
 	return err;
 }
 
-static int cache_getdir(const char *path, fuse_dirh_t h, fuse_dirfil_t filler)
+int cache_getdir(const char *path, fuse_dirh_t h, fuse_dirfil_t filler)
 {
 	struct fuse_cache_dirhandle ch;
 	int err;
@@ -509,6 +509,7 @@ static void cache_unity_fill(struct fuse_cache_operations *oper,
 	cache_oper->truncate    = oper->oper.truncate;
 	cache_oper->utime       = oper->oper.utime;
 	cache_oper->open        = oper->oper.open;
+        // cache_oper->readdir     = oper->oper.readdir,
 	cache_oper->read        = oper->oper.read;
 	cache_oper->write       = oper->oper.write;
 	cache_oper->flush       = oper->oper.flush;
@@ -546,6 +547,7 @@ static void cache_fill(struct fuse_cache_operations *oper,
 	cache_oper->chmod    = oper->oper.chmod ? cache_chmod : NULL;
 	cache_oper->chown    = oper->oper.chown ? cache_chown : NULL;
 	cache_oper->truncate = oper->oper.truncate ? cache_truncate : NULL;
+        // cache_oper->readdir  = oper->oper.readdir ? cache_readdir : NULL;
 	cache_oper->utime    = oper->oper.utime ? cache_utime : NULL;
 	cache_oper->write    = oper->oper.write ? cache_write : NULL;
 #if FUSE_VERSION >= 25

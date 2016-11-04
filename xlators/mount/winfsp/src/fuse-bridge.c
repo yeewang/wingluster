@@ -877,7 +877,7 @@ fuse_fd_cbk(call_frame_t* frame, void* cookie, xlator_t* this, int32_t op_ret,
                 */
                 fd_bind(fd);
 
-                args->fi->fh = fd;
+                args->fi->fh = FD_TO_FH(fd);
 
                 winfsp_send_result(this, stub, 0);
         } else {
@@ -2071,7 +2071,7 @@ fuse_create_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                 fd_bind(fd);
 
                 if (args != NULL) {
-                        args->fi->fh = (uintptr_t)fd;
+                        args->fi->fh = FD_TO_FH(fd);
                         if (foo.open_flags & FOPEN_DIRECT_IO) {
                                 args->fi->direct_io = 1;
                         }
@@ -2493,7 +2493,7 @@ fuse_flush(xlator_t* this, winfsp_msg_t* msg)
         fuse_state_t* state = NULL;
         fd_t* fd = NULL;
 
-        if (args->fi->fh == 0) {
+        if (args->fi->fh == INVALIDE_HANDLE) {
                 gf_log("glusterfs-fuse", GF_LOG_ERROR, "%" PRIu64 ": FLUSH %p",
                        0, fd);
                 winfsp_send_err(this, msg, ENOENT);
@@ -2537,7 +2537,7 @@ fuse_release(xlator_t* this, winfsp_msg_t* msg)
         fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
 
-        if (args->fi->fh == 0) {
+        if (args->fi->fh == INVALIDE_HANDLE) {
                 winfsp_send_err(this, msg, ENOENT);
                 return 0;
         }
@@ -2869,6 +2869,7 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
         fuse_private_t* priv = NULL;
         winfsp_msg_t* stub = NULL;
         winfsp_readdirp_t* rd_stub = NULL;
+        int need_closefd = 0;
         int count = 0;
 
         state = frame->root->state;
@@ -2876,6 +2877,7 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
         priv = this->private;
         stub = state->stub;
         rd_stub = (winfsp_readdirp_t*)stub->args;
+        need_closefd = (rd_stub->fi->fh == INVALIDE_HANDLE) ? 1 : 0;
 
         if (op_ret < 0) {
                 gf_log("glusterfs-fuse", GF_LOG_WARNING,
@@ -3024,14 +3026,96 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
 
         winfsp_send_result(this, stub, 0);
 out:
+        if (need_closefd) {
+                uint64_t val = 0;
+                int ret = 0;
+                fuse_fd_ctx_t* fdctx = NULL;
+                fuse_private_t* priv = NULL;
+
+                ret = fd_ctx_del(state->fd, this, &val);
+
+                if (!ret) {
+                        fdctx = (fuse_fd_ctx_t*)(unsigned long)val;
+                        if (fdctx) {
+                                if (fdctx->activefd) {
+                                        fd_unref(fdctx->activefd);
+                                }
+
+                                GF_FREE(fdctx);
+                        }
+                }
+
+                fd_unref(state->fd);
+
+                gf_fdptr_put(priv->fdtable, state->fd);
+        }
+
         free_fuse_state(state);
         STACK_DESTROY(frame->root);
+
+
         return 0;
 }
 
 void
 fuse_readdirp_resume(fuse_state_t* state)
 {
+        gf_log("glusterfs-fuse", GF_LOG_TRACE,
+               "%" PRIu64 ": READDIRP (%p, size=%" GF_PRI_SIZET
+               ", offset=%" PRId64 ")",
+               state->finh->unique, state->fd, state->size, state->off);
+
+        FUSE_FOP(state, fuse_readdirp_cbk, GF_FOP_READDIRP, readdirp, state->fd,
+                 state->size, state->off, state->xdata);
+}
+
+void
+fuse_readdirp_resume_ex(fuse_state_t* state)
+{
+        if (state->fd == NULL) {
+                fd_t* fd = NULL;
+                fuse_private_t* priv = NULL;
+                fuse_fd_ctx_t* fdctx = NULL;
+                winfsp_msg_t* stub = NULL;
+
+                priv = state->this->private;
+                stub = state->stub;
+
+                if (!state->loc.inode) {
+                        gf_log("glusterfs-fuse", GF_LOG_WARNING,
+                               "%" PRIu64 ": READDIRP (%s) resolution failed",
+                               state->finh->unique, uuid_utoa(state->resolve.gfid));
+                        winfsp_send_err(state->this, state->stub,
+                                      state->resolve.op_errno);
+                        free_fuse_state(state);
+                        return;
+                }
+
+                fd = fd_create(state->loc.inode, state->finh->pid);
+                if (fd == NULL) {
+                        gf_log("glusterfs-fuse", GF_LOG_WARNING,
+                               "%" PRIu64 ": READDIRP fd creation failed",
+                               state->finh->unique);
+                        winfsp_send_err(state->this, state->stub, ENOMEM);
+                        free_fuse_state(state);
+                        return;
+                }
+
+                fdctx = fuse_fd_ctx_check_n_create(state->this, fd);
+                if (fdctx == NULL) {
+                        gf_log("glusterfs-fuse", GF_LOG_WARNING,
+                               "%" PRIu64 ": READDIRP creation of fdctx failed",
+                               state->finh->unique);
+                        fd_unref(fd);
+                        winfsp_send_err(state->this, state->stub, ENOMEM);
+                        free_fuse_state(state);
+                        return;
+                }
+
+                state->fd = fd_ref(fd);
+                state->fd_no = gf_fd_unused_get(priv->fdtable, fd);
+        }
+
         gf_log("glusterfs-fuse", GF_LOG_TRACE,
                "%" PRIu64 ": READDIRP (%p, size=%" GF_PRI_SIZET
                ", offset=%" PRId64 ")",
@@ -3052,9 +3136,13 @@ fuse_readdirp(xlator_t* this, winfsp_msg_t* msg)
         FILL_STATE(msg, this, finh, args->path, state);
         state->stub = msg;
 
-        fd = FH_TO_FD(args->fi->fh);
+        if (args->fi && args->fi->fh != INVALIDE_HANDLE)
+                fd = FH_TO_FD(args->fi->fh);
+        else {
+                winfsp_send_err(this, msg, EINVAL);
+        }
 
-        state->size = 64 * 1024 * 1024; /* assume bufsize is 64MB */
+        state->size = 64 * 1024 * 1024; /* assume max of bufsize is 64MB */
         state->off = args->offset;
         state->fd = fd;
 
@@ -3156,7 +3244,7 @@ fuse_releasedir(xlator_t* this, winfsp_msg_t* msg)
         gf_fdptr_put(priv->fdtable, state->fd);
 
         state->fd = NULL;
-        args->fi->fh = 0;
+        args->fi->fh = INVALIDE_HANDLE;
 
         winfsp_send_err(this, msg, 0);
 

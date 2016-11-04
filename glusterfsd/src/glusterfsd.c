@@ -579,11 +579,7 @@ create_fuse_mount (glusterfs_ctx_t *ctx)
         if (!master->name)
                 goto err;
 
-#ifdef GF_CYGWIN_HOST_OS
-        if (xlator_set_type (master, "mount/dokan") == -1) {
-#else
         if (xlator_set_type (master, "mount/fuse") == -1) {
-#endif /* GF_CYGWIN_HOST_OS */
                 gf_msg ("glusterfsd", GF_LOG_ERROR, errno, glusterfsd_msg_8,
                         cmd_args->mount_point);
                 goto err;

@@ -167,7 +167,8 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
 
 #define _FH_TO_FD(fh) ((fd_t*)(uintptr_t)(fh))
 
-#define FH_TO_FD(fh) ((_FH_TO_FD(fh)) ? (fd_ref(_FH_TO_FD(fh))) : ((fd_t*)0))
+#define FH_TO_FD(fh) ((fh != INVALIDE_HANDLE) ? (fd_ref(_FH_TO_FD(fh))) : ((fd_t*)0))
+#define FD_TO_FH(fd) ((fd != NULL) ? ((uintptr_t)(fd)) : (INVALIDE_HANDLE))
 
 /* Use the same logic as the Linux NFS-client */
 #define GF_FUSE_SQUASH_INO(ino) (((uint32_t)ino) ^ (ino >> 32))
@@ -452,7 +453,7 @@ fuse_state_t* get_fuse_state(xlator_t* this, fuse_in_header_t* finh);
 void free_fuse_state(fuse_state_t* state);
 void gf_fuse_stat2attr(struct iatt* st, struct fuse_attr* fa,
                        gf_boolean_t enable_ino32);
-void gf_fuse_stat2winstat(struct iatt* st, struct stat* stbuf);
+void gf_fuse_stat2winstat(struct iatt* st, struct fuse_stat* stbuf);
 void gf_fuse_attr2winstat(struct fuse_attr* fa, struct stat* stbuf);
 void gf_fuse_dirent2winstat(struct fuse_dirent* ent, struct stat* stbuf);
 

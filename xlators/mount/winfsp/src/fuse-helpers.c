@@ -518,7 +518,7 @@ gf_fuse_stat2attr (struct iatt *st, struct fuse_attr *fa,
 }
 
 void
-gf_fuse_stat2winstat(struct iatt *st, struct stat *stbuf)
+gf_fuse_stat2winstat(struct iatt *st, struct fuse_stat *stbuf)
 {
         stbuf->st_dev = st->ia_dev;
         stbuf->st_ino = st->ia_ino;

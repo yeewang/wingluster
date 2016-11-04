@@ -15,6 +15,10 @@
 #include "winfsp-info.h"
 #include "fuse-cache.h"
 
+static int
+winfsp_releasedir(const char* path, struct fuse_file_info* fi);
+
+
 void
 winfsp_lookup(xlator_t* this, ino_t parent, char* bname)
 {
@@ -23,7 +27,7 @@ winfsp_lookup(xlator_t* this, ino_t parent, char* bname)
 
         msg = winfsp_get_req(FUSE_LOOKUP, sizeof(winfsp_lookup_t));
         if (msg == NULL)
-                return -1;
+                return;
 
         msg->autorelease = _gf_true;
 
@@ -71,7 +75,7 @@ winfsp_batch_forget(winfsp_forget_t *items, size_t count)
 }
 
 static int
-winfsp_getattr(const char* path, struct FUSE_STAT* stbuf)
+winfsp_getattr(const char *path, struct fuse_stat *stbuf)
 {
         winfsp_msg_t* msg = NULL;
         winfsp_getattr_t* params = NULL;
@@ -91,7 +95,7 @@ winfsp_getattr(const char* path, struct FUSE_STAT* stbuf)
 }
 
 static int
-winfsp_fgetattr(const char *path, struct FUSE_STAT *stbuf,
+winfsp_fgetattr(const char *path, struct fuse_stat *stbuf,
         struct fuse_file_info *fi)
 {
         winfsp_msg_t* msg = NULL;
@@ -516,12 +520,12 @@ winfsp_perform_lookup(xlator_t *this, char *path, inode_table_t *itable)
                 inode_unref(inode);
         }
 
-        return NULL;
+        return;
 }
 
 static int
-winfsp_readdirp(const char* path, void* buf, fuse_fill_dir_t filler,
-               off_t offset, struct fuse_file_info* fi)
+winfsp_readdirp_ex(const char* path, void* buf, fuse_fill_dir_t filler,
+               fuse_off_t offset, struct fuse_file_info* fi)
 {
         int ret = -1;
         winfsp_msg_t* msg = NULL;
@@ -636,6 +640,181 @@ winfsp_readdirp(const char* path, void* buf, fuse_fill_dir_t filler,
 }
 
 static int
+winfsp_readdirp_cache(const char* path, fuse_cache_dirh_t* buf, fuse_cache_dirfil_t filler,
+               fuse_off_t offset, struct fuse_file_info* fi)
+{
+        int ret = -1;
+        winfsp_msg_t* msg = NULL;
+        winfsp_readdirp_t* params = NULL;
+        winfsp_readdirp_item_t *part = NULL;
+        size_t size = 0;
+        int end = 0;
+
+        if (fi == NULL) {
+                return -1;
+        }
+
+        msg = winfsp_get_req(FUSE_READDIRPLUS, sizeof(winfsp_readdirp_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (winfsp_readdirp_t*)msg->args;
+        params->path = path;
+        params->buf = buf;
+        params->filler = filler;
+        params->offset = offset;
+        params->fi = fi;
+        params->out_buf = NULL;
+        params->out_size = 0;
+
+        INIT_LIST_HEAD(&params->list);
+        pthread_cond_init(&params->cond, NULL);
+        pthread_mutex_init(&params->mutex, NULL);
+
+        winfsp_send_req(msg);
+
+        while (!end && 0) {
+                part = NULL;
+                pthread_mutex_lock(&params->mutex);
+                {
+                        while (!end && list_empty(&params->list)) {
+                                ret = pthread_cond_wait(&params->cond, &params->mutex);
+                                if (ret != 0) {
+                                        gf_log(
+                                          "glusterfs-fuse", GF_LOG_DEBUG,
+                                          "timedwait returned non zero value "
+                                          "ret: %d errno: %d",
+                                          ret, errno);
+                                        break;
+                                }
+                        }
+
+                        if (!end) {
+                                part = list_first_entry(&params->list, winfsp_readdirp_item_t, list);
+                                list_del_init(&part->list);
+                        }
+                }
+                pthread_mutex_unlock(&params->mutex);
+
+                if (end)
+                        break;
+
+                if (part != NULL && filler) {
+                        struct fuse_direntplus* fde = NULL;
+                        struct fuse_entry_out* feo = NULL;
+                        struct stat stbuf;
+
+                        while (size < part->off) {
+                                fde = (struct fuse_direntplus*)(params->out_buf + size);
+                                feo = &fde->entry_out;
+
+                                memset(&stbuf, 0, sizeof(struct stat));
+                                gf_fuse_dirent2winstat(&fde->dirent, &stbuf);
+                                if (filler(buf, fde->dirent.name, &stbuf)) {
+                                        break;
+                                }
+
+                                size += FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS +
+                                                          fde->dirent.namelen + 1);
+                        }
+
+                        if (part->off == part->size)
+                                end = 1;
+
+                        GF_FREE(part);
+                }
+        }
+
+        ret = winfsp_get_result(msg);
+
+        if (ret == 0 && params->out_size > size && filler) {
+                struct fuse_direntplus* fde = NULL;
+                struct fuse_entry_out* feo = NULL;
+                struct stat stbuf;
+
+                while (size < params->out_size) {
+                        fde = (struct fuse_direntplus*)(params->out_buf + size);
+                        feo = &fde->entry_out;
+
+                        memset(&stbuf, 0, sizeof(struct stat));
+                        gf_fuse_dirent2winstat(&fde->dirent, &stbuf);
+                        if (filler(buf, fde->dirent.name, &stbuf)) {
+                                break;
+                        }
+
+                        size += FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS +
+                                                  fde->dirent.namelen + 1);
+                }
+        }
+
+        if (params->out_buf != NULL)
+                GF_FREE(params->out_buf);
+
+        winfsp_cleanup_req(msg);
+
+        return ret;
+}
+
+static int
+winfsp_readdirp(const char* path, void* buf, fuse_fill_dir_t filler,
+               fuse_off_t offset, struct fuse_file_info* fi)
+{
+        int ret = 0;
+
+        if (1 || fi == NULL || fi->fh == INVALIDE_HANDLE) {
+                struct fuse_file_info newfi = *fi;
+
+                ret = winfsp_opendir(path, &newfi);
+
+                if (ret == 0) {
+                        ret = winfsp_readdirp_ex(path, buf, filler, 0, &newfi);
+
+                        winfsp_releasedir(path, &newfi);
+                }
+        }
+        else {
+                ret = winfsp_readdirp_ex(path, buf, filler, offset, fi);
+        }
+
+        return ret;
+}
+
+int
+winfsp_getdir(const char* path,
+        fuse_cache_dirh_t buf, fuse_cache_dirfil_t filler)
+{
+        int ret = 0;
+
+        struct fuse_file_info fi;
+        ret = winfsp_opendir(path, &fi);
+
+        if (ret == 0) {
+                ret = winfsp_readdirp_cache(path, buf, filler, 0, &fi);
+
+                winfsp_releasedir(path, &fi);
+        }
+
+        return ret;
+}
+
+static int
+winfsp_getdir1(const char* path, fuse_dirh_t buf, fuse_dirfil_t filler)
+{
+        int ret = 0;
+
+        struct fuse_file_info fi;
+        ret = winfsp_opendir(path, &fi);
+
+        if (ret == 0) {
+                ret = winfsp_readdirp_ex(path, buf, filler, 0, &fi);
+
+                winfsp_releasedir(path, &fi);
+        }
+
+        return ret;
+}
+
+static int
 winfsp_truncate(const char* path, off_t size)
 {
         winfsp_msg_t* msg = NULL;
@@ -677,7 +856,7 @@ winfsp_ftruncate(const char *path, off_t size, struct fuse_file_info *fi)
         return winfsp_get_result_and_cleanup(msg);
 }
 
-int
+static int
 winfsp_releasedir(const char* path, struct fuse_file_info* fi)
 {
         winfsp_msg_t* msg = NULL;
@@ -1247,9 +1426,10 @@ winfsp_mount_proc(void* data)
         FREE(data);
         return NULL;
 }
-
+/*
 struct fuse_operations winfsp_operations = {
         .getattr        = winfsp_getattr,
+        .getdir         = winfsp_getdir,
         .readlink       = winfsp_readlink,
         .mknod          = winfsp_mknod,
         .mkdir          = winfsp_mkdir,
@@ -1286,19 +1466,19 @@ struct fuse_operations winfsp_operations = {
         .lock           = winfsp_lock,
         .utimens        = winfsp_utimens,
         .bmap           = NULL,
-
-#ifdef _WIN32
-        /* these to support extented windows calls */
-        .win_get_attributes = win_get_attributes,
-        .win_set_attributes = win_set_attributes,
-        .win_set_times = win_set_times,
-#endif
 };
+*/
+
+int cache_getdir(const char *path, fuse_dirh_t h, fuse_dirfil_t filler);
+
+int
+winfsp_getdir(const char* path,
+        fuse_cache_dirh_t buf, fuse_cache_dirfil_t filler);
 
 struct fuse_cache_operations winfsp_oper = {
         .oper = {
                 .getattr        = winfsp_getattr,
-                .getdir         = NULL, //winfsp_getdir,
+                // .getdir         = winfsp_getdir,
                 .readlink       = winfsp_readlink,
                 .mknod          = winfsp_mknod,
                 .mkdir          = winfsp_mkdir,
@@ -1323,7 +1503,7 @@ struct fuse_cache_operations winfsp_oper = {
                 .listxattr      = winfsp_listxattr,
                 .removexattr    = winfsp_removexattr,
                 .opendir        = winfsp_opendir,
-                .readdir        = winfsp_readdirp,
+                // .readdir        = winfsp_readdirp,
                 .releasedir     = winfsp_releasedir,
                 .fsyncdir       = winfsp_fsyncdir,
                 .init           = winfsp_init,
@@ -1341,6 +1521,6 @@ struct fuse_cache_operations winfsp_oper = {
 		.flag_nopath = 1,
 #endif
 	},
-	.cache_getdir = winfsp_readdirp,
+	.cache_getdir = winfsp_getdir,
 };
 

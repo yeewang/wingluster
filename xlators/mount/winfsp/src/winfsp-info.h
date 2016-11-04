@@ -4,6 +4,8 @@
 #include <fuse.h>
 #include "fuse-bridge.h"
 
+#define INVALIDE_HANDLE          (-1)
+
 typedef struct
 {
         struct fuse_conn_info* conn;
@@ -12,7 +14,7 @@ typedef struct
 typedef struct
 {
         const char* path;
-        struct FUSE_STAT* stbuf;
+        struct fuse_stat* stbuf;
         struct fuse_file_info* fi;
 } winfsp_getattr_t;
 
