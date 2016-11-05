@@ -705,14 +705,6 @@ fuse_getattr(xlator_t* this, winfsp_msg_t* msg)
         FILL_STATE(msg, this, finh, args->path, state);
 
         inode = fuse_ino_to_inode(finh->nodeid, this);
-        if (finh->nodeid != 1 && inode->iatt.ia_ino == finh->nodeid) {
-#ifdef NEVER
-                gf_fuse_stat2winstat(args->stbuf, &inode->iatt);
-                winfsp_send_result(this, msg, 0);
-                free_fuse_state(state);
-                return;
-#endif /* NEVER */
-        }
         gf_log("glusterfs-fuse", GF_LOG_TRACE,
                 "fuse_getattr path: %s, inode: %p, %p\n", args->path, inode->iatt.ia_ino, finh->nodeid);
 

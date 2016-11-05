@@ -52,7 +52,7 @@ fuse_mount_sys (const char *mountpoint, char *fsname,
         argv[3] = "-o";
         argv[4] = "fsname=StorSwift FS";
         argv[5] = "-n";
-        argv[6] = "-f";
+        argv[6] = "-d";
         argv[7] = mountpoint;
         argv[8] = NULL;
 

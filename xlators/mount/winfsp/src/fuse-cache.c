@@ -16,7 +16,7 @@
 #include <pthread.h>
 
 #define DEFAULT_CACHE_TIMEOUT_SECS 20
-#define DEFAULT_MAX_CACHE_SIZE 10000
+#define DEFAULT_MAX_CACHE_SIZE (128 * 1024)
 #define DEFAULT_CACHE_CLEAN_INTERVAL_SECS 60
 #define DEFAULT_MIN_CACHE_CLEAN_INTERVAL_SECS 5
 
@@ -39,7 +39,8 @@ static struct cache cache;
 
 struct node {
 	struct stat stat;
-	time_t stat_valid;
+	//time_t stat_valid;
+        int stat_is_valid;
 	char **dir;
 	time_t dir_valid;
 	char *link;
@@ -120,7 +121,7 @@ void cache_invalidate(const char *path)
 void cache_invalidate_write(const char *path)
 {
 	pthread_mutex_lock(&cache.lock);
-	cache_purge(path);
+	// cache_purge(path); // remove ?
 	cache.write_ctr++;
 	pthread_mutex_unlock(&cache.lock);
 }
@@ -160,6 +161,7 @@ static struct node *cache_get(const char *path)
 	if (node == NULL) {
 		char *pathcopy = g_strdup(path);
 		node = g_new0(struct node, 1);
+                node->stat_is_valid = 0;
 		g_hash_table_insert(cache.table, pathcopy, node);
 	}
 	return node;
@@ -176,9 +178,10 @@ void cache_add_attr(const char *path, const struct stat *stbuf, uint64_t wrctr)
 	if (wrctr == cache.write_ctr) {
 		node = cache_get(path);
 		node->stat = *stbuf;
-		node->stat_valid = time(NULL) + cache.stat_timeout_secs;
-		if (node->stat_valid > node->valid)
-			node->valid = node->stat_valid;
+                node->stat_is_valid = 1;
+		time_t stat_valid = time(NULL) + cache.stat_timeout_secs;
+		if (stat_valid > node->valid)
+			node->valid = stat_valid;
 		cache_clean();
 	}
 	pthread_mutex_unlock(&cache.lock);
@@ -228,8 +231,7 @@ static int cache_get_attr(const char *path, struct stat *stbuf)
 	pthread_mutex_lock(&cache.lock);
 	node = cache_lookup(path);
 	if (node != NULL) {
-		time_t now = time(NULL);
-		if (node->stat_valid - now >= 0) {
+		if (node->stat_is_valid) {
 			*stbuf = node->stat;
 			err = 0;
 		}
@@ -450,8 +452,16 @@ static int cache_write(const char *path, const char *buf, size_t size,
 {
 	int res = cache.next_oper->oper.write(path, buf, size, offset, fi);
 	if (res >= 0)
-		cache_invalidate_write(path);
+	 	cache_invalidate_write(path);
 	return res;
+}
+
+static int cache_release(const char *path, struct fuse_file_info *fi)
+{
+	int err = cache.next_oper->oper.release(path, fi);
+	if (!err)
+		cache_invalidate(path);
+	return err;
 }
 
 #if FUSE_VERSION >= 25
@@ -549,7 +559,8 @@ static void cache_fill(struct fuse_cache_operations *oper,
 	cache_oper->truncate = oper->oper.truncate ? cache_truncate : NULL;
         // cache_oper->readdir  = oper->oper.readdir ? cache_readdir : NULL;
 	cache_oper->utime    = oper->oper.utime ? cache_utime : NULL;
-	cache_oper->write    = oper->oper.write ? cache_write : NULL;
+        cache_oper->write    = oper->oper.write ? cache_write : NULL;
+        cache_oper->release  = oper->oper.release ? cache_release : NULL;
 #if FUSE_VERSION >= 25
 	cache_oper->create   = oper->oper.create ? cache_create : NULL;
 	cache_oper->ftruncate = oper->oper.ftruncate ? cache_ftruncate : NULL;

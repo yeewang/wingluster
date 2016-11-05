@@ -1,6 +1,9 @@
 
 #include <glib.h>
+#include <sys/types.h>
+#include <pwd.h>
 #include <sys/cygwin.h>
+
 #include "fuse.h"
 #include "mount_util.h"
 #include "mount-gluster-compat.h"
@@ -15,12 +18,12 @@
 
 
 /* Conversion from cygwin path to windows path */
-const char *
+char *
 create_winpath_from_cygpath(const char *cygpath)
 {
-        const char *winpath = NULL;
+        char *winpath = NULL;
 
-        winpath = (const char *)cygwin_create_path (
+        winpath = (char *)cygwin_create_path (
                         CCP_POSIX_TO_WIN_A | CCP_ABSOLUTE, cygpath);
         return winpath;
 }
@@ -33,97 +36,7 @@ gf_fuse_unmount (const char *mountpoint, struct fuse *fuse)
         }
 }
 
-#if 0
-static struct fuse *
-fuse_mount_sys (const char *mountpoint, char *fsname,
-                unsigned long mountflags, char *mnt_param)
-{
-        int res = -1;
-        struct fuse *fuse;
-        char *mnt_point;
-        int multithreaded;
-        int argc = 8;
-        char *argv[12];
-        char *volname;
-
-        if (asprintf(&volname, "volname=%s", fsname) == -1)
-                return NULL;
-
-        argv[0] = "dokan";
-        argv[1] = "-o";
-        argv[2] = volname;
-        argv[3] = "-o";
-        argv[4] = "fsname=StorSwift FS";
-        argv[5] = "-n";
-        argv[6] = "-d";
-        argv[7] = mountpoint;
-        argv[8] = NULL;
-
-        umask(0);
-
-        fuse = fuse_setup(argc, argv, &dokan_operations,
-                          sizeof(dokan_operations), &mnt_point, &multithreaded,
-                          NULL);
-        if (fuse == NULL) {
-                GFFUSE_LOGERR("ret = 1\n");
-                free(volname);
-                return NULL;
-        }
-
-        // MT loops are only supported on MSVC
-        if (multithreaded)
-                res = fuse_loop_mt(fuse);
-        else
-                res = fuse_loop(fuse);
-
-        fuse_teardown(fuse, mountpoint);
-
-        if (res < 0) {
-                GFFUSE_LOGERR("ret = %d\n", res);
-                free(volname);
-                return NULL;
-        }
-
-        free(volname);
-
-        return fuse;
-}
-
-struct fuse *
-gf_fuse_mount1 (const char *mountpoint, char *fsname,
-               unsigned long mountflags, char *mnt_param,
-               int status_fd)
-{
-        int   ret = -1;
-        const char *winpath = NULL;
-        struct fuse *fuse = NULL;
-
-        /* convert cygwin path to Windows */
-        winpath = create_winpath_from_cygpath (mountpoint);
-        if (winpath == NULL) {
-                GFFUSE_LOGERR ("Convert linux path(%s) to windows failed",
-                        mountpoint);
-                goto out;
-        }
-
-        /* start mount agent */
-        fuse = fuse_mount_sys (winpath, fsname, mountflags, mnt_param);
-        if (fuse == NULL)
-                GFFUSE_LOGERR ("mount of %s to %s (%s) failed",
-                               fsname, mountpoint, mnt_param);
-
-        free (winpath);
-        gf_log ("glusterfs-fuse", GF_LOG_INFO, "mount agent exited.");
-
-out:
-        if (status_fd >= 0)
-                (void)write (status_fd, &ret, sizeof (ret));
-
-        return fuse;
-}
-#endif
-
-static struct fuse_opt sshfs_opts[] = {
+static struct fuse_opt ext_opts[] = {
 	FUSE_OPT_END
 };
 
@@ -134,27 +47,71 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
                unsigned long mountflags, char *mnt_param,
                int status_fd)
 {
-        char *argv[] = { "mount", NULL };
+        char idmap[64];
+        struct passwd *passwd;
         struct fuse *fuse = NULL;
+        char *winpath = NULL;
 	int res;
-	struct fuse_args args = FUSE_ARGS_INIT(1, argv);
-	char *tmp;
-	const char *sftp_server;
-	int libver;
 
-	if (fuse_opt_parse(&args, NULL, sshfs_opts, NULL) == -1)
+        /* get uid/gid from local user name */
+        passwd = getpwuid(getuid());
+        if (0 != passwd)
+                snprintf(idmap, sizeof idmap, "-ouid=%d,gid=%d", passwd->pw_uid, passwd->pw_gid);
+
+        passwd = getpwnam("yiwang");
+        if (0 != passwd)
+                snprintf(idmap, sizeof idmap, "-ouid=%d,gid=%d", passwd->pw_uid, passwd->pw_gid);
+
+        /* convert cygwin path to Windows */
+        winpath = create_winpath_from_cygpath (mountpoint);
+        if (winpath == NULL) {
+                GFFUSE_LOGERR ("Convert linux path(%s) to windows failed",
+                        mountpoint);
+                goto out;
+        }
+        winpath[2] = '\0';
+
+        char param[255];
+        char *volserver = NULL;
+        char *volfile = NULL;
+        char *p = strchr(fsname, ':');
+        if (p)
+                *p = '\0';
+        volserver = fsname;
+        volfile = ++p;
+        while (*p != '\0') {
+                if (*p == '/') {
+                        strcpy(p, p+1);
+                }
+                p++;
+        }
+        snprintf(param, sizeof(param), "--VolumePrefix=\\%s\\%s", volserver, volfile);
+
+        char *argv[] = {
+                "mount",
+                param,
+                "--FileSystemName=STORSWIFT-FS",
+                winpath,
+                NULL };
+	struct fuse_args args = FUSE_ARGS_INIT(4, argv);
+
+	if (fuse_opt_parse(&args, NULL, ext_opts, NULL) == -1) {
+                GFFUSE_LOGERR ("parse ext_opts failed");
 		goto out;
+        }
 
 	res = cache_parse_options(&args);
-	if (res == -1)
-		goto out;
+	if (res == -1) {
+                GFFUSE_LOGERR ("parse cache failed");
+                goto out;
+        }
+
+	fuse_opt_insert_arg(&args, 1, "-f");
+        // fuse_opt_insert_arg(&args, 2, "-d");
+        fuse_opt_insert_arg(&args, 2, idmap);
 
 	if (fuse_is_lib_option("ac_attr_timeout="))
-		fuse_opt_insert_arg(&args, 1, "-oauto_cache,ac_attr_timeout=0");
-
-	tmp = g_strdup_printf("-osubtype=storswiftfs,fsname=%s", fsname);
-	fuse_opt_insert_arg(&args, 1, tmp);
-	g_free(tmp);
+		fuse_opt_insert_arg(&args, 3, "-oauto_cache,ac_attr_timeout=0");
 
 #if FUSE_VERSION >= 26
 	{
@@ -167,23 +124,32 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
 
 		res = fuse_parse_cmdline(&args, &mountpoint, &multithreaded,
 					 &foreground);
-		if (res == -1)
+		if (res == -1) {
+                        GFFUSE_LOGERR ("parse cmdline failed");
 			goto out;
+                }
 
+                foreground = 1;
+
+                /*
 		res = stat(mountpoint, &st);
 		if (res == -1) {
-			perror(mountpoint);
+			GFFUSE_LOGERR ("check mountpoint failed: %d", errno);
 			goto out;
 		}
+		*/
 
-		ch = fuse_mount("M:", &args);
-		if (!ch)
+		ch = fuse_mount(mountpoint, &args);
+		if (!ch) {
+                        GFFUSE_LOGERR ("mount failed: %d", errno);
 			goto out;
+                }
 
 		fuse_operations = cache_init(&winfsp_oper);
 		fuse = fuse_new(ch, &args, fuse_operations,
 				sizeof(struct fuse_operations), NULL);
 		if (fuse == NULL) {
+                        GFFUSE_LOGERR ("fuse_new failed: %d", errno);
 			fuse_unmount(mountpoint, ch);
 			goto out;
 		}
@@ -193,6 +159,8 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
 			res = fuse_set_signal_handlers(fuse_get_session(fuse));
 
 		if (res == -1) {
+                        GFFUSE_LOGERR ("fuse_daemonize failed: %d", errno);
+
 			fuse_unmount(mountpoint, ch);
 			fuse_destroy(fuse);
 			goto out;
@@ -208,6 +176,9 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
 		else
 			res = 0;
 
+                gf_log ("glusterfs-fuse", GF_LOG_INFO, "mount agent exited.");
+
+                free(winpath);
 		fuse_remove_signal_handlers(fuse_get_session(fuse));
 		fuse_unmount(mountpoint, ch);
 		fuse_destroy(fuse);
