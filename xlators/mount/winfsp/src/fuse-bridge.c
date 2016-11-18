@@ -290,9 +290,11 @@ fuse_attr_cbk(call_frame_t* frame, void* cookie, xlator_t* this, int32_t op_ret,
                 fao.attr_valid_nsec =
                   calc_timeout_nsec(priv->attribute_timeout);
 
+                /*
                 if (state->loc.inode) {
                         memcpy(&state->loc.inode->iatt, buf, sizeof(*buf));
                 }
+                */
 
                 if (stub->type == FUSE_GETATTR)
                         gf_fuse_stat2winstat(buf, dd->stbuf);
@@ -706,7 +708,7 @@ fuse_getattr(xlator_t* this, winfsp_msg_t* msg)
 
         inode = fuse_ino_to_inode(finh->nodeid, this);
         gf_log("glusterfs-fuse", GF_LOG_TRACE,
-                "fuse_getattr path: %s, inode: %p, %p\n", args->path, inode->iatt.ia_ino, finh->nodeid);
+                "fuse_getattr path: %s, inode: %p\n", args->path, finh->nodeid);
 
         inode_unref(inode);
 
@@ -1086,6 +1088,12 @@ fuse_setattr(xlator_t* this, winfsp_msg_t* msg)
 
         if (args->valid & (FATTR_SIZE)) {
                 state->off = args->off;
+        }
+
+        /* Is the lockowner useful on Windows? */
+        if (args->valid & FATTR_LOCKOWNER) {
+                if (args->fi != NULL)
+                        state->lk_owner = args->fi->lock_owner;
         }
 
         fuse_resolve_and_resume(state, fuse_setattr_resume);
@@ -2346,10 +2354,15 @@ fuse_read(xlator_t* this, winfsp_msg_t* msg)
 
         fd = FH_TO_FD(args->fi->fh);
         state->fd = fd;
-        state->lk_owner = args->fi->lock_owner;
+
+        /*
+        if (args->fi->flags & FUSE_READ_LOCKOWNER)
+                state->lk_owner = args->fi->lock_owner;
+        */
+
         state->size = args->size;
         state->off = args->offset;
-        state->io_flags = args->fi->flags;
+        state->io_flags = 0; /* maybe handle FUSE_READ_LOCKOWNER? */
         state->flags = args->fi->flags;
         state->xdata = dict_new();
 
@@ -2449,7 +2462,7 @@ fuse_write(xlator_t* this, winfsp_msg_t* msg)
         state->off = args->offset;
 
         /* convert FUSE_WRITE_LOCKOWNER, etc ? */
-        state->io_flags = args->fi->flags;
+        state->io_flags = FUSE_WRITE_CACHE;
 
         /* TODO: may need to handle below flag
            (fwi->write_flags & FUSE_WRITE_CACHE);
@@ -2457,7 +2470,10 @@ fuse_write(xlator_t* this, winfsp_msg_t* msg)
 
         fuse_resolve_fd_init(state, &state->resolve, fd);
 
-        state->lk_owner = args->fi->lock_owner;
+        /*
+        if (args->fi->flags & FUSE_WRITE_LOCKOWNER)
+                state->lk_owner = args->fi->lock_owner;
+        */
 
         memcpy(priv->iobuf->ptr, args->buf, args->size);
 
@@ -5380,15 +5396,26 @@ fuse_dumper(xlator_t* this, winfsp_msg_t* msg)
         int ret = -1;
         fuse_private_t* priv = NULL;
         priv = this->private;
+        char *buf = NULL;
 
-        pthread_mutex_lock(&priv->fuse_dump_mutex);
+        ret = gf_asprintf(&buf, "fuse received message %p type: %d, unique: %lu\n",
+                msg, msg->type, msg->unique);
 
-        pthread_mutex_unlock(&priv->fuse_dump_mutex);
+        if (ret != -1) {
+                pthread_mutex_lock(&priv->fuse_dump_mutex);
+
+                ret = write(priv->fuse_dump_fd, buf, ret);
+
+                pthread_mutex_unlock(&priv->fuse_dump_mutex);
+
+                GF_FREE(buf);
+        }
+
         if (ret == -1)
                 gf_log("glusterfs-fuse", GF_LOG_ERROR,
                        "failed to dump fuse message (R): %s", strerror(errno));
 
-        priv->fuse_ops0[msg->finh->opcode](this, msg);
+        priv->fuse_ops0[msg->type](this, msg);
 }
 
 int

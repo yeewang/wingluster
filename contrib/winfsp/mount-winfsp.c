@@ -106,12 +106,12 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
                 goto out;
         }
 
-	fuse_opt_insert_arg(&args, 1, "-f");
-        // fuse_opt_insert_arg(&args, 2, "-d");
-        fuse_opt_insert_arg(&args, 2, idmap);
+	//fuse_opt_add_arg(&args, "-d");
+        fuse_opt_add_arg(&args, "-f");
+        fuse_opt_add_arg(&args, idmap);
 
 	if (fuse_is_lib_option("ac_attr_timeout="))
-		fuse_opt_insert_arg(&args, 3, "-oauto_cache,ac_attr_timeout=0");
+		fuse_opt_add_arg(&args, "-oauto_cache,ac_attr_timeout=0");
 
 #if FUSE_VERSION >= 26
 	{

@@ -96,7 +96,6 @@ struct _inode {
         uint32_t             fd_count;      /* Open fd count */
         uint32_t             ref;           /* reference count on this inode */
         ia_type_t            ia_type;       /* what kind of file */
-        struct iatt          iatt;
         struct list_head     fd_list;       /* list of open files on this inode */
         struct list_head     dentry_list;   /* list of directory entries for this inode */
         struct list_head     hash;          /* hash table pointers */
