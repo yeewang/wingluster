@@ -36,7 +36,8 @@ import syncdutils
 from syncdutils import GsyncdError, select, privileged, boolify, funcode
 from syncdutils import umask, entry2pb, gauxpfx, errno_wrap, lstat
 from syncdutils import NoPurgeTimeAvailable, PartialHistoryAvailable
-from syncdutils import ChangelogException
+from syncdutils import ChangelogException, ChangelogHistoryNotAvailable
+from syncdutils import get_changelog_log_level
 from syncdutils import CHANGELOG_AGENT_CLIENT_VERSION
 from gsyncdstatus import GeorepStatus
 
@@ -169,7 +170,13 @@ class Popen(subprocess.Popen):
                         except ValueError:  # file is already closed
                             time.sleep(0.5)
                             continue
-                        l = os.read(fd, 1024)
+
+                        try:
+                            l = os.read(fd, 1024)
+                        except OSError:
+                            time.sleep(0.5)
+                            continue
+
                         if not l:
                             continue
                         tots = len(l)
@@ -204,6 +211,7 @@ class Popen(subprocess.Popen):
             kw['close_fds'] = True
         self.lock = threading.Lock()
         self.on_death_row = False
+        self.elines = []
         try:
             sup(self, args, *a, **kw)
         except:
@@ -534,17 +542,23 @@ class Server(object):
     @_pathguard
     def set_stime(cls, path, uuid, mark):
         """set @mark as stime for @uuid on @path"""
-        Xattr.lsetxattr(
-            path, '.'.join([cls.GX_NSPACE, uuid, 'stime']),
-            struct.pack('!II', *mark))
+        errno_wrap(Xattr.lsetxattr,
+                   [path,
+                    '.'.join([cls.GX_NSPACE, uuid, 'stime']),
+                    struct.pack('!II', *mark)],
+                   [ENOENT],
+                   [ESTALE, EINVAL])
 
     @classmethod
     @_pathguard
     def set_xtime(cls, path, uuid, mark):
         """set @mark as xtime for @uuid on @path"""
-        Xattr.lsetxattr(
-            path, '.'.join([cls.GX_NSPACE, uuid, 'xtime']),
-            struct.pack('!II', *mark))
+        errno_wrap(Xattr.lsetxattr,
+                   [path,
+                    '.'.join([cls.GX_NSPACE, uuid, 'xtime']),
+                    struct.pack('!II', *mark)],
+                   [ENOENT],
+                   [ESTALE, EINVAL])
 
     @classmethod
     @_pathguard
@@ -769,7 +783,23 @@ class Server(object):
                     else:
                         if st.st_ino == st1.st_ino:
                             # we have a hard link, we can now unlink source
-                            os.unlink(entry)
+                            try:
+                                os.unlink(entry)
+                            except OSError as e:
+                                if e.errno == EISDIR:
+                                    try:
+                                        os.rmdir(entry)
+                                    except OSError as e:
+                                        if e.errno == ENOTEMPTY:
+                                            logging.error(
+                                                "Unable to delete directory "
+                                                "{0}, Both Old({1}) and New{2}"
+                                                " directories exists".format(
+                                                    entry, entry, en))
+                                        else:
+                                            raise
+                                else:
+                                    raise
                         else:
                             rename_with_disk_gfid_confirmation(gfid, entry, en)
             if blob:
@@ -1034,6 +1064,12 @@ class SlaveRemote(object):
         # wait for tar to terminate, collecting any errors, further
         # waiting for transfer to complete
         _, stderr1 = p1.communicate()
+
+        # stdin and stdout of p0 is already closed, Reset to None and
+        # wait for child process to complete
+        p0.stdin = None
+        p0.stdout = None
+        p0.communicate()
 
         if log_err:
             for errline in stderr1.strip().split("\n")[:-1]:
@@ -1477,7 +1513,8 @@ class GLUSTER(AbstractUrl, SlaveLocal, SlaveRemote):
                     changelog_agent.init()
                     changelog_agent.register(gconf.local_path,
                                              workdir, gconf.changelog_log_file,
-                                             g2.CHANGELOG_LOG_LEVEL,
+                                             get_changelog_log_level(
+                                                 gconf.changelog_log_level),
                                              g2.CHANGELOG_CONN_RETRIES)
 
                 register_time = int(time.time())
@@ -1498,6 +1535,9 @@ class GLUSTER(AbstractUrl, SlaveLocal, SlaveRemote):
             except PartialHistoryAvailable as e:
                 logging.info('Partial history available, using xsync crawl'
                              ' after consuming history till %s' % str(e))
+                g1.crawlwrap(oneshot=True, register_time=register_time)
+            except ChangelogHistoryNotAvailable:
+                logging.info('Changelog history not available, using xsync')
                 g1.crawlwrap(oneshot=True, register_time=register_time)
             except NoPurgeTimeAvailable:
                 logging.info('No stime available, using xsync crawl')

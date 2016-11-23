@@ -552,7 +552,6 @@ invalid_fs:
 
 GFAPI_SYMVER_PUBLIC_DEFAULT(glfs_creat, 3.4.0);
 
-
 off_t
 pub_glfs_lseek (struct glfs_fd *glfd, off_t offset, int whence)
 {
@@ -742,7 +741,6 @@ glfs_io_async_cbk (int op_ret, int op_errno, call_frame_t *frame,
 
         GF_VALIDATE_OR_GOTO ("gfapi", frame, inval);
         GF_VALIDATE_OR_GOTO ("gfapi", cookie, inval);
-        GF_VALIDATE_OR_GOTO ("gfapi", iovec, inval);
 
         gio = frame->local;
         frame->local = NULL;
@@ -756,6 +754,12 @@ glfs_io_async_cbk (int op_ret, int op_errno, call_frame_t *frame,
         if (op_ret <= 0) {
                 goto out;
         } else if (gio->op == GF_FOP_READ) {
+                if (!iovec) {
+                        op_ret = -1;
+                        op_errno = EINVAL;
+                        goto out;
+                }
+
                 op_ret = iov_copy (gio->iov, gio->count, iovec, count);
                 glfd->offset = gio->offset + op_ret;
         } else if (gio->op == GF_FOP_WRITE) {
@@ -866,6 +870,8 @@ pub_glfs_preadv_async (struct glfs_fd *glfd, const struct iovec *iovec,
 
 out:
         if (ret) {
+                if (fd)
+                        fd_unref (fd);
                 if (glfd)
                         GF_REF_PUT (glfd);
                 if (gio) {
@@ -1150,12 +1156,13 @@ pub_glfs_pwritev_async (struct glfs_fd *glfd, const struct iovec *iovec,
 
         gio->op     = GF_FOP_WRITE;
         gio->glfd   = glfd;
-        gio->count  = count;
         gio->offset = offset;
         gio->flags  = flags;
         gio->fn     = fn;
         gio->data   = data;
-        gio->iov = GF_CALLOC (1, sizeof (*(gio->iov)), gf_common_mt_iovec);
+        gio->count  = 1;
+        gio->iov = GF_CALLOC (gio->count, sizeof (*(gio->iov)),
+                              gf_common_mt_iovec);
         if (!gio->iov) {
                 errno = ENOMEM;
                 goto out;
@@ -1180,6 +1187,8 @@ pub_glfs_pwritev_async (struct glfs_fd *glfd, const struct iovec *iovec,
         ret = 0;
 out:
         if (ret) {
+                if (fd)
+                        fd_unref (fd);
                 if (glfd)
                         GF_REF_PUT (glfd);
                 GF_FREE (gio);
@@ -1364,6 +1373,8 @@ glfs_fsync_async_common (struct glfs_fd *glfd, glfs_io_cbk fn, void *data,
 
 out:
         if (ret) {
+                if (fd)
+                        fd_unref (fd);
                 if (glfd)
                         GF_REF_PUT (glfd);
                 GF_FREE (gio);
@@ -1503,6 +1514,50 @@ invalid_fs:
 
 GFAPI_SYMVER_PUBLIC_DEFAULT(glfs_ftruncate, 3.4.0);
 
+int
+pub_glfs_truncate (struct glfs *fs, const char *path, off_t length)
+{
+        int              ret = -1;
+        xlator_t        *subvol = NULL;
+        loc_t            loc = {0, };
+        struct iatt      iatt = {0, };
+        int              reval = 0;
+
+        DECLARE_OLD_THIS;
+        __GLFS_ENTRY_VALIDATE_FS (fs, invalid_fs);
+
+        subvol = glfs_active_subvol (fs);
+        if (!subvol) {
+                ret = -1;
+                errno = EIO;
+                goto out;
+        }
+retry:
+        ret = glfs_resolve (fs, subvol, path, &loc, &iatt, reval);
+
+        ESTALE_RETRY (ret, errno, reval, &loc, retry);
+
+        if (ret)
+                goto out;
+
+        ret = syncop_truncate (subvol, &loc, length, NULL, NULL);
+        DECODE_SYNCOP_ERR (ret);
+
+        ESTALE_RETRY (ret, errno, reval, &loc, retry);
+out:
+        loc_wipe (&loc);
+
+        glfs_subvol_done (fs, subvol);
+
+        __GLFS_EXIT_FS;
+
+invalid_fs:
+        return ret;
+}
+
+GFAPI_SYMVER_PUBLIC_DEFAULT(glfs_truncate, 3.7.15);
+
+
 static int
 glfs_ftruncate_async_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
                           int32_t op_ret, int32_t op_errno,
@@ -1571,6 +1626,8 @@ pub_glfs_ftruncate_async (struct glfs_fd *glfd, off_t offset, glfs_io_cbk fn,
 
 out:
         if (ret) {
+                if (fd)
+                        fd_unref (fd);
                 if (glfd)
                         GF_REF_PUT (glfd);
                 GF_FREE (gio);
@@ -2427,6 +2484,8 @@ pub_glfs_discard_async (struct glfs_fd *glfd, off_t offset, size_t len,
         ret = 0;
 out:
         if (ret) {
+                if (fd)
+                        fd_unref (fd);
                 if (glfd)
                         GF_REF_PUT (glfd);
                 GF_FREE (gio);
@@ -2512,6 +2571,8 @@ pub_glfs_zerofill_async (struct glfs_fd *glfd, off_t offset, off_t len,
         ret = 0;
 out:
         if (ret) {
+                if (fd)
+                        fd_unref (fd);
                 if (glfd)
                         GF_REF_PUT (glfd);
                 GF_FREE (gio);
@@ -3035,7 +3096,8 @@ GFAPI_SYMVER_PUBLIC_DEFAULT(glfs_fchown, 3.4.0);
 
 
 int
-pub_glfs_utimens (struct glfs *fs, const char *path, struct timespec times[2])
+pub_glfs_utimens (struct glfs *fs, const char *path,
+                  const struct timespec times[2])
 {
 	int              ret = -1;
 	int              valid = 0;
@@ -3057,7 +3119,8 @@ GFAPI_SYMVER_PUBLIC_DEFAULT(glfs_utimens, 3.4.0);
 
 
 int
-pub_glfs_lutimens (struct glfs *fs, const char *path, struct timespec times[2])
+pub_glfs_lutimens (struct glfs *fs, const char *path,
+                   const struct timespec times[2])
 {
 	int              ret = -1;
 	int              valid = 0;
@@ -3079,7 +3142,7 @@ GFAPI_SYMVER_PUBLIC_DEFAULT(glfs_lutimens, 3.4.0);
 
 
 int
-pub_glfs_futimens (struct glfs_fd *glfd, struct timespec times[2])
+pub_glfs_futimens (struct glfs_fd *glfd, const struct timespec times[2])
 {
 	int              ret = -1;
 	int              valid = 0;
@@ -3126,8 +3189,6 @@ glfs_getxattr_process (void *value, size_t size, dict_t *xattr,
 
 	memcpy (value, data->data, ret);
 out:
-	if (xattr)
-		dict_unref (xattr);
 	return ret;
 }
 
@@ -3187,6 +3248,9 @@ retry:
 	ret = glfs_getxattr_process (value, size, xattr, name);
 out:
 	loc_wipe (&loc);
+
+        if (xattr)
+                dict_unref (xattr);
 
 	glfs_subvol_done (fs, subvol);
 
@@ -3268,6 +3332,8 @@ out:
 		fd_unref (fd);
         if (glfd)
                 GF_REF_PUT (glfd);
+        if (xattr)
+                dict_unref (xattr);
 
 	glfs_subvol_done (glfd->fs, subvol);
 
@@ -3301,9 +3367,6 @@ glfs_listxattr_process (void *value, size_t size, dict_t *xattr)
 	}
 
 out:
-        if (xattr)
-                dict_unref (xattr);
-
 	return ret;
 }
 
@@ -3351,6 +3414,9 @@ retry:
 	ret = glfs_listxattr_process (value, size, xattr);
 out:
 	loc_wipe (&loc);
+
+        if (xattr)
+                dict_unref (xattr);
 
 	glfs_subvol_done (fs, subvol);
 
@@ -3417,6 +3483,8 @@ out:
 		fd_unref (fd);
         if (glfd)
                 GF_REF_PUT (glfd);
+        if (xattr)
+                dict_unref (xattr);
 
 	glfs_subvol_done (glfd->fs, subvol);
 
@@ -3931,9 +3999,11 @@ invalid_fs:
 
 GFAPI_SYMVER_PUBLIC_DEFAULT(glfs_fchdir, 3.4.0);
 
+static gf_boolean_t warn_realpath = _gf_true; /* log once */
 
-char *
-pub_glfs_realpath (struct glfs *fs, const char *path, char *resolved_path)
+static char *
+glfs_realpath_common (struct glfs *fs, const char *path, char *resolved_path,
+                      gf_boolean_t warn_deprecated)
 {
 	int              ret = -1;
 	char            *retpath = NULL;
@@ -3948,8 +4018,20 @@ pub_glfs_realpath (struct glfs *fs, const char *path, char *resolved_path)
 
 	if (resolved_path)
 		retpath = resolved_path;
-	else
-		retpath = allocpath = malloc (PATH_MAX + 1);
+        else if (warn_deprecated) {
+                retpath = allocpath = malloc (PATH_MAX + 1);
+                if (warn_realpath) {
+                        warn_realpath = _gf_false;
+                        gf_log (THIS->name, GF_LOG_WARNING, "this application "
+                                "is compiled against an old version of "
+                                "libgfapi, it should use glfs_free() to "
+                                "release the path returned by "
+                                "glfs_realpath()");
+                }
+        } else {
+                retpath = allocpath = GF_CALLOC (1, PATH_MAX + 1,
+                                                 glfs_mt_realpath_t);
+        }
 
 	if (!retpath) {
 		ret = -1;
@@ -3980,9 +4062,11 @@ out:
 	loc_wipe (&loc);
 
 	if (ret == -1) {
-		if (allocpath)
-			free (allocpath);
-		retpath = NULL;
+                if (warn_deprecated && allocpath)
+                        free (allocpath);
+                else if (allocpath)
+                        GF_FREE (allocpath);
+                retpath = NULL;
 	}
 
 	glfs_subvol_done (fs, subvol);
@@ -3993,7 +4077,22 @@ invalid_fs:
 	return retpath;
 }
 
-GFAPI_SYMVER_PUBLIC_DEFAULT(glfs_realpath, 3.4.0);
+
+char *
+pub_glfs_realpath34 (struct glfs *fs, const char *path, char *resolved_path)
+{
+        return glfs_realpath_common (fs, path, resolved_path, _gf_true);
+}
+
+GFAPI_SYMVER_PUBLIC(glfs_realpath34, glfs_realpath, 3.4.0);
+
+char *
+pub_glfs_realpath (struct glfs *fs, const char *path, char *resolved_path)
+{
+        return glfs_realpath_common (fs, path, resolved_path, _gf_false);
+}
+
+GFAPI_SYMVER_PUBLIC_DEFAULT(glfs_realpath, 3.7.17);
 
 
 char *
@@ -4208,7 +4307,8 @@ priv_glfs_process_upcall_event (struct glfs *fs, void *data)
         {
                 ctx = fs->ctx;
 
-                if (ctx->cleanup_started) {
+                /* if we're not interested in upcalls (anymore), skip them */
+                if (ctx->cleanup_started || !fs->cache_upcalls) {
                         pthread_mutex_unlock (&fs->mutex);
                         goto out;
                 }
@@ -4268,8 +4368,10 @@ priv_glfs_process_upcall_event (struct glfs *fs, void *data)
 
         ret = 0;
 out:
-        if (ret && u_list)
+        if (ret && u_list) {
+                GF_FREE (u_list->upcall_data.data);
                 GF_FREE(u_list);
+        }
         return;
 }
 

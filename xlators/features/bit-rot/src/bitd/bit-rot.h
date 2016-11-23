@@ -26,7 +26,7 @@
 #include "changelog.h"
 #include "timer-wheel.h"
 
-#include "bit-rot-tbf.h"
+#include "throttle-tbf.h"
 #include "bit-rot-ssm.h"
 
 #include "bit-rot-common.h"
@@ -55,6 +55,7 @@ typedef enum scrub_freq {
         BR_FSSCRUB_FREQ_WEEKLY,
         BR_FSSCRUB_FREQ_BIWEEKLY,
         BR_FSSCRUB_FREQ_MONTHLY,
+        BR_FSSCRUB_FREQ_MINUTE,
         BR_FSSCRUB_FREQ_STALLED,
 } scrub_freq_t;
 
@@ -213,7 +214,7 @@ struct br_private {
 
         uint32_t expiry_time;              /* objects "wait" time */
 
-        br_tbf_t *tbf;                    /* token bucket filter */
+        tbf_t *tbf;                    /* token bucket filter */
 
         gf_boolean_t iamscrubber;         /* function as a fs scrubber */
 

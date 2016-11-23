@@ -37,7 +37,7 @@ libglusterfs_la_SOURCES = dict.c xlator.c logging.c \
 	strfd.c parse-utils.c $(CONTRIBDIR)/mount/mntent.c \
 	$(CONTRIBDIR)/libexecinfo/execinfo.c quota-common-utils.c rot-buffs.c \
 	$(CONTRIBDIR)/timer-wheel/timer-wheel.c \
-	$(CONTRIBDIR)/timer-wheel/find_last_bit.c tw.c
+	$(CONTRIBDIR)/timer-wheel/find_last_bit.c tw.c throttle-tbf.c
 
 nodist_libglusterfs_la_SOURCES = y.tab.c graph.lex.c
 
@@ -53,12 +53,12 @@ noinst_HEADERS = common-utils.h defaults.h dict.h glusterfs.h hashfn.h timespec.
 	run.h options.h lkowner.h fd-lk.h circ-buff.h event-history.h \
 	gidcache.h client_t.h glusterfs-acl.h glfs-message-id.h \
 	template-component-messages.h strfd.h syncop-utils.h parse-utils.h \
-	ctr-messages.h libglusterfs-messages.h \
+	libglusterfs-messages.h \
 	$(CONTRIBDIR)/mount/mntent_compat.h lvm-defaults.h \
 	$(CONTRIBDIR)/libexecinfo/execinfo_compat.h \
 	unittest/unittest.h quota-common-utils.h rot-buffs.h \
 	$(CONTRIBDIR)/timer-wheel/timer-wheel.h compat-uuid.h \
-	upcall-utils.h tw.h
+	upcall-utils.h tw.h throttle-tbf.h
 
 if !HAVE_LIBUUID
 # FIXME: unbundle libuuid, see compat-uuid.h.

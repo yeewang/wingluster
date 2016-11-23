@@ -94,7 +94,8 @@ bitd_scrub_post_compute_check (xlator_t *this,
                                br_child_t *child,
                                fd_t *fd, unsigned long version,
                                br_isignature_out_t **signature,
-                               br_scrub_stats_t *scrub_stat)
+                               br_scrub_stats_t *scrub_stat,
+                               gf_boolean_t skip_stat)
 {
         int32_t              ret     = 0;
         size_t               signlen = 0;
@@ -103,7 +104,8 @@ bitd_scrub_post_compute_check (xlator_t *this,
 
         ret = bitd_fetch_signature (this, child, fd, &xattr, &signptr);
         if (ret < 0) {
-                br_inc_unsigned_file_count (scrub_stat);
+                if (!skip_stat)
+                        br_inc_unsigned_file_count (scrub_stat);
                 goto out;
         }
 
@@ -116,7 +118,8 @@ bitd_scrub_post_compute_check (xlator_t *this,
          * The log entry looks pretty ugly, but helps in debugging..
          */
         if (signptr->stale || (signptr->version != version)) {
-                br_inc_unsigned_file_count (scrub_stat);
+                if (!skip_stat)
+                        br_inc_unsigned_file_count (scrub_stat);
                 gf_msg_debug (this->name, 0, "<STAGE: POST> Object [GFID: %s] "
                               "either has a stale signature OR underwent "
                               "signing during checksumming {Stale: %d | "
@@ -145,7 +148,7 @@ static int32_t
 bitd_signature_staleness (xlator_t *this,
                           br_child_t *child, fd_t *fd,
                           int *stale, unsigned long *version,
-                          br_scrub_stats_t *scrub_stat)
+                          br_scrub_stats_t *scrub_stat, gf_boolean_t skip_stat)
 {
         int32_t ret = -1;
         dict_t *xattr = NULL;
@@ -153,7 +156,8 @@ bitd_signature_staleness (xlator_t *this,
 
         ret = bitd_fetch_signature (this, child, fd, &xattr, &signptr);
         if (ret < 0) {
-                br_inc_unsigned_file_count (scrub_stat);
+                if (!skip_stat)
+                        br_inc_unsigned_file_count (scrub_stat);
                 goto out;
         }
 
@@ -181,7 +185,8 @@ bitd_signature_staleness (xlator_t *this,
 int32_t
 bitd_scrub_pre_compute_check (xlator_t *this, br_child_t *child,
                               fd_t *fd, unsigned long *version,
-                              br_scrub_stats_t *scrub_stat)
+                              br_scrub_stats_t *scrub_stat,
+                              gf_boolean_t skip_stat)
 {
         int     stale = 0;
         int32_t ret   = -1;
@@ -194,9 +199,10 @@ bitd_scrub_pre_compute_check (xlator_t *this, br_child_t *child,
         }
 
         ret = bitd_signature_staleness (this, child, fd, &stale, version,
-                                        scrub_stat);
+                                        scrub_stat, skip_stat);
         if (!ret && stale) {
-                br_inc_unsigned_file_count (scrub_stat);
+                if (!skip_stat)
+                        br_inc_unsigned_file_count (scrub_stat);
                 gf_msg_debug (this->name, 0, "<STAGE: PRE> Object [GFID: %s] "
                               "has stale signature",
                               uuid_utoa (fd->inode->gfid));
@@ -293,6 +299,9 @@ br_scrubber_scrub_begin (xlator_t *this, struct br_fsscan_entry *fsentry)
         gf_dirent_t           *entry         = NULL;
         br_private_t          *priv          = NULL;
         loc_t                 *parent        = NULL;
+        gf_boolean_t           skip_stat     = _gf_false;
+        uuid_t                 shard_root_gfid = {0,};
+
 
         GF_VALIDATE_OR_GOTO ("bit-rot", fsentry, out);
 
@@ -335,6 +344,18 @@ br_scrubber_scrub_begin (xlator_t *this, struct br_fsscan_entry *fsentry)
                 goto unref_inode;
         }
 
+        if (IS_DHT_LINKFILE_MODE ((&iatt))) {
+                gf_msg_debug (this->name, 0, "%s is a dht sticky bit file",
+                              entry->d_name);
+                ret = 0;
+                goto unref_inode;
+        }
+
+        /* skip updating scrub statistics for shard entries */
+        gf_uuid_parse (SHARD_ROOT_GFID, shard_root_gfid);
+        if (gf_uuid_compare (loc.pargfid, shard_root_gfid) == 0)
+                skip_stat = _gf_true;
+
         /**
          * open() an fd for subsequent opertaions
          */
@@ -362,7 +383,7 @@ br_scrubber_scrub_begin (xlator_t *this, struct br_fsscan_entry *fsentry)
          *  - signature staleness
          */
         ret = bitd_scrub_pre_compute_check (this, child, fd, &signedversion,
-                                            &priv->scrub_stat);
+                                            &priv->scrub_stat, skip_stat);
         if (ret)
                 goto unrefd; /* skip this object */
 
@@ -386,15 +407,16 @@ br_scrubber_scrub_begin (xlator_t *this, struct br_fsscan_entry *fsentry)
          * become stale while scrubber calculated checksum.
          */
         ret = bitd_scrub_post_compute_check (this, child, fd, signedversion,
-                                             &sign, &priv->scrub_stat);
+                                             &sign, &priv->scrub_stat,
+                                             skip_stat);
         if (ret)
                 goto free_md;
 
         ret = bitd_compare_ckum (this, sign, md,
                                  linked_inode, entry, fd, child, &loc);
 
-        /* Increment of total number of scrubbed file counter */
-        br_inc_scrubbed_file (&priv->scrub_stat);
+        if (!skip_stat)
+                br_inc_scrubbed_file (&priv->scrub_stat);
 
         GF_FREE (sign); /* alloced on post-compute */
 
@@ -666,6 +688,7 @@ br_scrubber_entry_control (xlator_t *this)
                 if (scrub_monitor->state == BR_SCRUB_STATE_PENDING)
                         scrub_monitor->state = BR_SCRUB_STATE_ACTIVE;
                 br_scrubber_log_time (this, "started");
+                priv->scrub_stat.scrub_running = 1;
         }
         UNLOCK (&scrub_monitor->lock);
 }
@@ -682,6 +705,7 @@ br_scrubber_exit_control (xlator_t *this)
         LOCK (&scrub_monitor->lock);
         {
                 br_scrubber_log_time (this, "finished");
+                priv->scrub_stat.scrub_running = 0;
 
                 if (scrub_monitor->state == BR_SCRUB_STATE_ACTIVE) {
                         (void) br_fsscan_activate (this);
@@ -838,6 +862,7 @@ br_fsscan_calculate_delta (uint32_t times)
         return times;
 }
 
+#define BR_SCRUB_MINUTE     (60)
 #define BR_SCRUB_HOURLY     (60 * 60)
 #define BR_SCRUB_DAILY      (1 * 24 * 60 * 60)
 #define BR_SCRUB_WEEKLY     (7 * 24 * 60 * 60)
@@ -850,6 +875,9 @@ br_fsscan_calculate_timeout (scrub_freq_t freq)
         uint32_t timo = 0;
 
         switch (freq) {
+        case BR_FSSCRUB_FREQ_MINUTE:
+                timo = br_fsscan_calculate_delta (BR_SCRUB_MINUTE);
+                break;
         case BR_FSSCRUB_FREQ_HOURLY:
                 timo = br_fsscan_calculate_delta (BR_SCRUB_HOURLY);
                 break;
@@ -1423,6 +1451,8 @@ br_scrubber_handle_freq (xlator_t *this, br_private_t *priv,
                 frequency = BR_FSSCRUB_FREQ_BIWEEKLY;
         } else if (strcasecmp (tmp, "monthly") == 0) {
                 frequency = BR_FSSCRUB_FREQ_MONTHLY;
+        } else if (strcasecmp (tmp, "minute") == 0) {
+                frequency = BR_FSSCRUB_FREQ_MINUTE;
         } else if (strcasecmp (tmp, BR_SCRUB_STALLED) == 0) {
                 frequency = BR_FSSCRUB_FREQ_STALLED;
         } else
@@ -1455,6 +1485,7 @@ static void br_scrubber_log_option (xlator_t *this,
                 [BR_FSSCRUB_FREQ_WEEKLY]   = "weekly",
                 [BR_FSSCRUB_FREQ_BIWEEKLY] = "biweekly",
                 [BR_FSSCRUB_FREQ_MONTHLY]  = "monthly (30 days)",
+                [BR_FSSCRUB_FREQ_MINUTE]  = "every minute",
         };
 
         if (scrubstall)
@@ -1931,7 +1962,7 @@ br_scrubber_init (xlator_t *this, br_private_t *priv)
         struct br_scrubber *fsscrub = NULL;
         int                 ret     = 0;
 
-        priv->tbf = br_tbf_init (NULL, 0);
+        priv->tbf = tbf_init (NULL, 0);
         if (!priv->tbf)
                 return -1;
 

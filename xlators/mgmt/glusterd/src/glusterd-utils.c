@@ -4975,7 +4975,7 @@ _local_gsyncd_start (dict_t *this, char *key, data_t *value, void *data)
         }
 
         ret = glusterd_gsync_read_frm_status (statefile, buf, sizeof (buf));
-        if (ret < 0) {
+        if (ret <= 0) {
                 gf_msg (this1->name, GF_LOG_ERROR, 0,
                         GD_MSG_STAT_FILE_READ_FAILED,
                         "Unable to read the status");
@@ -4986,9 +4986,9 @@ _local_gsyncd_start (dict_t *this, char *key, data_t *value, void *data)
         if ((key1 = strchr (slave, '/')))
                 key1 = key1 + 2;
 
-        /* Looks for the last status, to find if the sessiom was running
-         * when the node went down. If the session was not started or
-         * not started, do not restart the geo-rep session */
+        /* Looks for the last status, to find if the session was running
+         * when the node went down. If the session was just created or
+         * stopped, do not restart the geo-rep session */
         if ((!strcmp (buf, "Created")) ||
             (!strcmp (buf, "Stopped"))) {
                 gf_msg (this1->name, GF_LOG_INFO, 0,
@@ -5095,7 +5095,7 @@ glusterd_get_dist_leaf_count (glusterd_volinfo_t *volinfo)
 
 int
 glusterd_get_brickinfo (xlator_t *this, const char *brickname, int port,
-                        gf_boolean_t localhost, glusterd_brickinfo_t **brickinfo)
+                        glusterd_brickinfo_t **brickinfo)
 {
         glusterd_conf_t         *priv = NULL;
         glusterd_volinfo_t      *volinfo = NULL;
@@ -5109,7 +5109,7 @@ glusterd_get_brickinfo (xlator_t *this, const char *brickname, int port,
         cds_list_for_each_entry (volinfo, &priv->volumes, vol_list) {
                 cds_list_for_each_entry (tmpbrkinfo, &volinfo->bricks,
                                          brick_list) {
-                        if (localhost && !gf_is_local_addr (tmpbrkinfo->hostname))
+                        if (gf_uuid_compare (tmpbrkinfo->uuid, MY_UUID))
                                 continue;
                         if (!strcmp(tmpbrkinfo->path, brickname) &&
                             (tmpbrkinfo->port == port)) {
@@ -6601,40 +6601,16 @@ glusterd_recreate_volfiles (glusterd_conf_t *conf)
 }
 
 int32_t
-glusterd_handle_upgrade_downgrade (dict_t *options, glusterd_conf_t *conf)
+glusterd_handle_upgrade_downgrade (dict_t *options, glusterd_conf_t *conf,
+                                   gf_boolean_t upgrade, gf_boolean_t downgrade)
 {
         int              ret                            = 0;
         char            *type                           = NULL;
-        gf_boolean_t     upgrade                        = _gf_false;
-        gf_boolean_t     downgrade                      = _gf_false;
         gf_boolean_t     regenerate_volfiles            = _gf_false;
         gf_boolean_t     terminate                      = _gf_false;
 
-        ret = dict_get_str (options, "upgrade", &type);
-        if (!ret) {
-                ret = gf_string2boolean (type, &upgrade);
-                if (ret) {
-                        gf_msg ("glusterd", GF_LOG_ERROR, 0,
-                                GD_MSG_STR_TO_BOOL_FAIL, "upgrade option "
-                                "%s is not a valid boolean type", type);
-                        ret = -1;
-                        goto out;
-                }
-                if (_gf_true == upgrade)
-                        regenerate_volfiles = _gf_true;
-        }
-
-        ret = dict_get_str (options, "downgrade", &type);
-        if (!ret) {
-                ret = gf_string2boolean (type, &downgrade);
-                if (ret) {
-                        gf_msg ("glusterd", GF_LOG_ERROR, 0,
-                                GD_MSG_STR_TO_BOOL_FAIL, "downgrade option "
-                                "%s is not a valid boolean type", type);
-                        ret = -1;
-                        goto out;
-                }
-        }
+        if (_gf_true == upgrade)
+                regenerate_volfiles = _gf_true;
 
         if (upgrade && downgrade) {
                 gf_msg ("glusterd", GF_LOG_ERROR, 0,
@@ -8590,6 +8566,7 @@ glusterd_volume_bitrot_scrub_use_rsp_dict (dict_t *aggr, dict_t *rsp_dict)
         glusterd_volinfo_t      *volinfo            = NULL;
         int                      src_count          = 0;
         int                      dst_count          = 0;
+        int8_t                   scrub_running      = 0;
 
         this = THIS;
         GF_ASSERT (this);
@@ -8635,6 +8612,19 @@ glusterd_volume_bitrot_scrub_use_rsp_dict (dict_t *aggr, dict_t *rsp_dict)
                 ret = dict_set_dynstr (aggr, key, node_uuid_str);
                 if (ret) {
                         gf_msg_debug (this->name, 0, "failed to set node-uuid");
+                }
+        }
+
+        memset (key, 0, 256);
+        snprintf (key, 256, "scrub-running-%d", src_count);
+        ret = dict_get_int8 (rsp_dict, key, &scrub_running);
+        if (!ret) {
+                memset (key, 0, 256);
+                snprintf (key, 256, "scrub-running-%d", src_count+dst_count);
+                ret = dict_set_int8 (aggr, key, scrub_running);
+                if (ret) {
+                        gf_msg_debug (this->name, 0, "Failed to set "
+                                      "scrub-running value");
                 }
         }
 
@@ -8809,6 +8799,7 @@ glusterd_bitrot_volume_node_rsp (dict_t *aggr, dict_t *rsp_dict)
         xlator_t                *this               = NULL;
         glusterd_conf_t         *priv               = NULL;
         glusterd_volinfo_t      *volinfo            = NULL;
+        int8_t                   scrub_running      = 0;
 
         this = THIS;
         GF_ASSERT (this);
@@ -8915,6 +8906,17 @@ glusterd_bitrot_volume_node_rsp (dict_t *aggr, dict_t *rsp_dict)
                 if (ret) {
                         gf_msg_debug (this->name, 0, "Failed to set "
                                       "scrub state value to dictionary");
+                }
+        }
+
+        ret = dict_get_int8 (rsp_dict, "scrub-running", &scrub_running);
+        if (!ret) {
+                memset (key, 0, 256);
+                snprintf (key, 256, "scrub-running-%d", i);
+                ret = dict_set_uint64 (aggr, key, scrub_running);
+                if (ret) {
+                        gf_msg_debug (this->name, 0, "Failed to set "
+                                      "scrub-running value");
                 }
         }
 
@@ -10489,6 +10491,7 @@ glusterd_rpc_clnt_unref (glusterd_conf_t *conf, rpc_clnt_t *rpc)
         GF_ASSERT (conf);
         GF_ASSERT (rpc);
         synclock_unlock (&conf->big_lock);
+        (void) rpc_clnt_reconnect_cleanup (&rpc->conn);
         ret = rpc_clnt_unref (rpc);
         synclock_lock (&conf->big_lock);
 

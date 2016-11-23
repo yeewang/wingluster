@@ -2402,6 +2402,9 @@ glusterd_op_stage_copy_file (dict_t *dict, char **op_errstr)
         glusterd_conf_t *priv                   = NULL;
         struct stat      stbuf                  = {0,};
         xlator_t         *this                  = NULL;
+        char             workdir[PATH_MAX]      = {0,};
+        char             realpath_filename[PATH_MAX] = {0,};
+        char             realpath_workdir[PATH_MAX]  = {0,};
 
         this = THIS;
         GF_ASSERT (this);
@@ -2445,6 +2448,37 @@ glusterd_op_stage_copy_file (dict_t *dict, char **op_errstr)
                 }
                 snprintf (abs_filename, sizeof(abs_filename),
                           "%s/%s", priv->workdir, filename);
+
+                if (!realpath (priv->workdir, realpath_workdir)) {
+                        snprintf (errmsg, sizeof (errmsg), "Failed to get "
+                                  "realpath of %s: %s", priv->workdir,
+                                  strerror (errno));
+                        *op_errstr = gf_strdup (errmsg);
+                        ret = -1;
+                        goto out;
+                }
+
+                if (!realpath (abs_filename, realpath_filename)) {
+                        snprintf (errmsg, sizeof (errmsg), "Failed to get "
+                                  "realpath of %s: %s", filename,
+                                  strerror (errno));
+                        *op_errstr = gf_strdup (errmsg);
+                        ret = -1;
+                        goto out;
+                }
+
+                /* Add Trailing slash to workdir, without slash strncmp
+                   will succeed for /var/lib/glusterd_bad */
+                snprintf (workdir, sizeof(workdir), "%s/", realpath_workdir);
+
+                /* Protect against file copy outside $workdir */
+                if (strncmp (workdir, realpath_filename, strlen (workdir))) {
+                        snprintf (errmsg, sizeof (errmsg), "Source file"
+                                  " is outside of %s directory", priv->workdir);
+                        *op_errstr = gf_strdup (errmsg);
+                        ret = -1;
+                        goto out;
+                }
 
                 ret = lstat (abs_filename, &stbuf);
                 if (ret) {
@@ -4258,7 +4292,10 @@ glusterd_gsync_read_frm_status (char *path, char *buf, size_t blen)
                         while (isspace (*p))
                                 *p-- = '\0';
                 }
-        } else if (ret < 0)
+        } else if (ret == 0)
+                gf_msg (this->name, GF_LOG_ERROR, 0, GD_MSG_GSYNCD_ERROR,
+                        "Status file of gsyncd is empty");
+        else /* ret < 0 */
                 gf_msg (this->name, GF_LOG_ERROR, 0, GD_MSG_GSYNCD_ERROR,
                         "Status file of gsyncd is corrupt");
 
@@ -4985,6 +5022,7 @@ glusterd_gsync_delete (glusterd_volinfo_t *volinfo, char *slave,
         char             geo_rep_dir[PATH_MAX] = "";
         char            *conf_path = NULL;
         xlator_t *this = NULL;
+        uint32_t        reset_sync_time = _gf_false;
 
         this = THIS;
         GF_ASSERT (this);
@@ -5020,6 +5058,13 @@ glusterd_gsync_delete (glusterd_volinfo_t *volinfo, char *slave,
                           "--delete", "-c", NULL);
         runner_argprintf (&runner, "%s", conf_path);
         runner_argprintf (&runner, "--iprefix=%s", DATADIR);
+
+        runner_argprintf (&runner, "--path-list=%s", path_list);
+
+        ret = dict_get_uint32 (dict, "reset-sync-time", &reset_sync_time);
+        if (!ret && reset_sync_time) {
+                runner_add_args  (&runner, "--reset-sync-time", NULL);
+        }
 
         if (volinfo) {
                 master = volinfo->volname;

@@ -205,8 +205,16 @@ struct glfs {
 	int                 ret;
 	int                 err;
 
-	xlator_t           *active_subvol;
-	xlator_t           *next_subvol;
+	xlator_t           *active_subvol; /* active graph */
+        xlator_t           *mip_subvol;    /* graph for which migration is in
+                                            * progress */
+	xlator_t           *next_subvol;   /* Any new graph is put to
+                                            * next_subvol, the graph in
+                                            * next_subvol can either be move to
+                                            * mip_subvol (if any IO picks it up
+                                            * for migration), or be detroyed (if
+                                            * there is a new graph, and this was
+                                            * never picked for migration) */
 	xlator_t           *old_subvol;
 
 	char               *oldvolfile;
@@ -220,6 +228,7 @@ struct glfs {
 
 	gf_boolean_t        migration_in_progress;
 
+        gf_boolean_t        cache_upcalls; /* add upcalls to the upcall_list? */
         struct list_head    upcall_list;
         pthread_mutex_t     upcall_list_mutex; /* mutex for upcall entry list */
 
@@ -254,6 +263,26 @@ struct glfs_fd {
 struct glfs_object {
         inode_t         *inode;
         uuid_t          gfid;
+};
+
+struct glfs_upcall {
+        struct glfs             *fs;     /* glfs object */
+        enum glfs_upcall_reason  reason; /* Upcall event type */
+        void                    *event;  /* changes based in the event type */
+        void (*free_event)(void *);      /* free event after the usage */
+};
+
+struct glfs_upcall_inode {
+        struct glfs_object   *object;  /* Object which need to be acted upon */
+        int                   flags;   /* Cache UPDATE/INVALIDATE flags */
+        struct stat           buf;     /* Latest stat of this entry */
+        unsigned int          expire_time_attr; /* the amount of time for which
+                                                 * the application need to cache
+                                                 * this entry */
+        struct glfs_object   *p_object; /* parent Object to be updated */
+        struct stat           p_buf;    /* Latest stat of parent dir handle */
+        struct glfs_object   *oldp_object; /* Old parent Object to be updated */
+        struct stat           oldp_buf; /* Latest stat of old parent dir handle */
 };
 
 #define DEFAULT_EVENT_POOL_SIZE           16384
@@ -432,7 +461,7 @@ int glfs_get_upcall_cache_invalidation (struct gf_upcall *to_up_data,
                                         struct gf_upcall *from_up_data);
 int
 glfs_h_poll_cache_invalidation (struct glfs *fs,
-                                struct callback_arg *up_arg,
+                                struct glfs_upcall *up_arg,
                                 struct gf_upcall *upcall_data);
 
 ssize_t
@@ -446,5 +475,36 @@ glfs_anonymous_pwritev (struct glfs *fs, struct glfs_object *object,
 
 struct glfs_object *
 glfs_h_resolve_symlink (struct glfs *fs, struct glfs_object *object);
+
+
+/* Deprecated structures that were passed to client applications, replaced by
+ * accessor functions. Do not use these in new applications, and update older
+ * usage.
+ *
+ * See http://review.gluster.org/14701 for more details.
+ *
+ * WARNING: These structures will be removed in the future.
+ */
+struct glfs_callback_arg {
+        struct glfs             *fs;
+        enum glfs_upcall_reason  reason;
+        void                    *event_arg;
+};
+
+struct glfs_callback_inode_arg {
+        struct glfs_object      *object; /* Object which need to be acted upon */
+        int                     flags; /* Cache UPDATE/INVALIDATE flags */
+        struct stat             buf; /* Latest stat of this entry */
+        unsigned int            expire_time_attr; /* the amount of time for which
+                                                   * the application need to cache
+                                                   * this entry
+                                                   */
+        struct glfs_object      *p_object; /* parent Object to be updated */
+        struct stat             p_buf; /* Latest stat of parent dir handle */
+        struct glfs_object      *oldp_object; /* Old parent Object
+                                               * to be updated */
+        struct stat             oldp_buf; /* Latest stat of old parent
+                                           * dir handle */
+};
 
 #endif /* !_GLFS_INTERNAL_H */

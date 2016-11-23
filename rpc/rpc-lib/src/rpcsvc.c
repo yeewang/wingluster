@@ -874,6 +874,20 @@ err:
         return txrecord;
 }
 
+static uint32_t
+rpc_callback_new_callid (struct rpc_transport *trans)
+{
+        uint32_t callid = 0;
+
+        pthread_mutex_lock (&trans->lock);
+        {
+                callid = ++trans->xid;
+        }
+        pthread_mutex_unlock (&trans->lock);
+
+        return callid;
+}
+
 int
 rpcsvc_fill_callback (int prognum, int progver, int procnum, int payload,
                       uint32_t xid, struct rpc_msg *request)
@@ -1052,6 +1066,7 @@ rpcsvc_callback_submit (rpcsvc_t *rpc, rpc_transport_t *trans,
         rpc_transport_req_t    req;
         int                    ret         = -1;
         int                    proglen     = 0;
+        uint32_t               xid         = 0;
 
         if (!rpc) {
                 goto out;
@@ -1063,11 +1078,11 @@ rpcsvc_callback_submit (rpcsvc_t *rpc, rpc_transport_t *trans,
                 proglen += iov_length (proghdr, proghdrcount);
         }
 
+        xid = rpc_callback_new_callid (trans);
+
         request_iob = rpcsvc_callback_build_record (rpc, prog->prognum,
                                                     prog->progver, procnum,
-                                                    proglen,
-                                                    GF_UNIVERSAL_ANSWER,
-                                                    &rpchdr);
+                                                    proglen, xid, &rpchdr);
         if (!request_iob) {
                 gf_log ("rpcsvc", GF_LOG_WARNING,
                         "cannot build rpc-record");
@@ -1889,21 +1904,28 @@ build_prog_details (rpcsvc_request_t *req, gf_dump_rsp *rsp)
         if (!req || !req->trans || !req->svc)
                 goto out;
 
-        list_for_each_entry (program, &req->svc->programs, program) {
-                prog = GF_CALLOC (1, sizeof (*prog), 0);
-                if (!prog)
-                        goto out;
-                prog->progname = program->progname;
-                prog->prognum  = program->prognum;
-                prog->progver  = program->progver;
-                if (!rsp->prog)
-                        rsp->prog = prog;
+        pthread_mutex_lock (&req->svc->rpclock);
+        {
+                list_for_each_entry (program, &req->svc->programs, program) {
+                        prog = GF_CALLOC (1, sizeof (*prog), 0);
+                        if (!prog)
+                                goto unlock;
+
+                        prog->progname = program->progname;
+                        prog->prognum  = program->prognum;
+                        prog->progver  = program->progver;
+
+                        if (!rsp->prog)
+                                rsp->prog = prog;
+                        if (prev)
+                                prev->next = prog;
+                        prev = prog;
+                }
                 if (prev)
-                        prev->next = prog;
-                prev = prog;
+                        ret = 0;
         }
-        if (prev)
-                ret = 0;
+unlock:
+        pthread_mutex_unlock (&req->svc->rpclock);
 out:
         return ret;
 }

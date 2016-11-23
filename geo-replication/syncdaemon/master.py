@@ -673,7 +673,6 @@ class GMasterChangelogMixin(GMasterCommon):
     # maximum retries per changelog before giving up
     MAX_RETRIES = 10
 
-    CHANGELOG_LOG_LEVEL = 9
     CHANGELOG_CONN_RETRIES = 5
 
     def archive_and_purge_changelogs(self, changelogs):
@@ -981,7 +980,8 @@ class GMasterChangelogMixin(GMasterCommon):
 
                 # Remove Unlinked GFIDs from Queue
                 for unlinked_gfid in self.unlinked_gfids:
-                    self.datas_in_batch.remove(unlinked_gfid)
+                    if unlinked_gfid in self.datas_in_batch:
+                        self.datas_in_batch.remove(unlinked_gfid)
 
                 # Retry only Sync. Do not retry entry ops
                 if self.datas_in_batch:
@@ -1376,6 +1376,9 @@ class GMasterXsyncMixin(GMasterChangelogMixin):
                              "correct xtime for %s (%d)" % (path, xtr))
             xtr = self.minus_infinity
         xtr = max(xtr, xtr_root)
+        zero_zero = (0, 0)
+        if xtr_root == zero_zero:
+            xtr = self.minus_infinity
         if not self.need_sync(path, xtl, xtr):
             if path == '.':
                 self.sync_done([(path, xtl)], True)

@@ -27,9 +27,9 @@ from ipaddr import IPAddress, IPNetwork
 
 from gconf import gconf
 from syncdutils import FreeObject, norm, grabpidfile, finalize
-from syncdutils import log_raise_exception, privileged
+from syncdutils import log_raise_exception, privileged, boolify
 from syncdutils import GsyncdError, select, set_term_handler
-from configinterface import GConffile, upgrade_config_file
+from configinterface import GConffile, upgrade_config_file, TMPL_CONFIG_FILE
 import resource
 from monitor import monitor
 import xml.etree.ElementTree as XET
@@ -37,6 +37,8 @@ from subprocess import PIPE
 import subprocess
 from changelogagent import agent, Changelog
 from gsyncdstatus import set_monitor_status, GeorepStatus
+from libcxattr import Xattr
+import struct
 
 ParseError = XET.ParseError if hasattr(XET, 'ParseError') else SyntaxError
 
@@ -242,6 +244,7 @@ def main_i():
                   default=os.devnull, type=str, action='callback',
                   callback=store_abs)
     op.add_option('--gluster-log-level', metavar='LVL')
+    op.add_option('--changelog-log-level', metavar='LVL', default="INFO")
     op.add_option('--gluster-params', metavar='PRMS', default='')
     op.add_option(
         '--glusterd-uuid', metavar='UUID', type=str, default='',
@@ -253,9 +256,9 @@ def main_i():
                   action='callback', callback=store_abs)
     op.add_option('-l', '--log-file', metavar='LOGF', type=str,
                   action='callback', callback=store_abs)
-    op.add_option('--iprefix',  metavar='LOGD',  type=str,
+    op.add_option('--iprefix', metavar='LOGD', type=str,
                   action='callback', callback=store_abs)
-    op.add_option('--changelog-log-file',  metavar='LOGF',  type=str,
+    op.add_option('--changelog-log-file', metavar='LOGF', type=str,
                   action='callback', callback=store_abs)
     op.add_option('--log-file-mbr', metavar='LOGF', type=str,
                   action='callback', callback=store_abs)
@@ -355,6 +358,9 @@ def main_i():
                   action='callback', callback=store_local)
     op.add_option('--delete', dest='delete', action='callback',
                   callback=store_local_curry(True))
+    op.add_option('--path-list', dest='path_list', action='callback',
+                  type=str, callback=store_local)
+    op.add_option('--reset-sync-time', default=False, action='store_true')
     op.add_option('--status-get', dest='status_get', action='callback',
                   callback=store_local_curry(True))
     op.add_option('--debug', dest="go_daemon", action='callback',
@@ -531,12 +537,11 @@ def main_i():
                 if name == 'remote':
                     namedict['remotehost'] = x.remotehost
     if not 'config_file' in rconf:
-        rconf['config_file'] = os.path.join(
-            os.path.dirname(sys.argv[0]), "conf/gsyncd_template.conf")
+        rconf['config_file'] = TMPL_CONFIG_FILE
 
-    upgrade_config_file(rconf['config_file'])
+    upgrade_config_file(rconf['config_file'], confdata)
     gcnf = GConffile(
-        rconf['config_file'], canon_peers,
+        rconf['config_file'], canon_peers, confdata,
         defaults.__dict__, opts.__dict__, namedict)
 
     checkpoint_change = False
@@ -572,6 +577,10 @@ def main_i():
     delete = rconf.get('delete')
     if delete:
         logging.info('geo-replication delete')
+        # remove the stime xattr from all the brick paths so that
+        # a re-create of a session will start sync all over again
+        stime_xattr_name = getattr(gconf, 'master.stime_xattr_name', None)
+
         # Delete pid file, status file, socket file
         cleanup_paths = []
         if getattr(gconf, 'pid_file', None):
@@ -604,6 +613,20 @@ def main_i():
             # To delete temp files
             for f in glob.glob(path + "*"):
                 _unlink(f)
+
+        reset_sync_time = boolify(gconf.reset_sync_time)
+        if reset_sync_time and stime_xattr_name:
+            path_list = rconf.get('path_list')
+            paths = []
+            for p in path_list.split('--path='):
+                stripped_path = p.strip()
+                if stripped_path != "":
+                    # set stime to (0,0) to trigger full volume content resync
+                    # to slave on session recreation
+                    # look at master.py::Xcrawl   hint: zero_zero
+                    Xattr.lsetxattr(stripped_path, stime_xattr_name,
+                                    struct.pack("!II", 0, 0))
+
         return
 
     if restricted and gconf.allow_network:

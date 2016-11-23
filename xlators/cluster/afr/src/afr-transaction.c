@@ -776,18 +776,6 @@ afr_handle_quorum (call_frame_t *frame)
         if (afr_has_fop_cbk_quorum (frame))
                 return;
 
-        if (local->fd) {
-                gf_uuid_copy (gfid, local->fd->inode->gfid);
-                file = uuid_utoa (gfid);
-        } else {
-                loc_path (&local->loc, local->loc.name);
-                file = local->loc.path;
-        }
-
-        gf_msg (frame->this->name, GF_LOG_WARNING, 0, AFR_MSG_QUORUM_FAIL,
-                "%s: Failing %s as quorum is not met",
-                file, gf_fop_list[local->op]);
-
         for (i = 0; i < priv->child_count; i++) {
                 if (local->transaction.pre_op[i])
                         afr_transaction_fop_failed (frame, frame->this, i);
@@ -797,6 +785,19 @@ afr_handle_quorum (call_frame_t *frame)
         local->op_errno = afr_final_errno (local, priv);
         if (local->op_errno == 0)
                 local->op_errno = afr_quorum_errno (priv);
+
+        if (local->fd) {
+                gf_uuid_copy (gfid, local->fd->inode->gfid);
+                file = uuid_utoa (gfid);
+        } else {
+                loc_path (&local->loc, local->loc.name);
+                file = local->loc.path;
+        }
+
+        gf_msg (frame->this->name, GF_LOG_WARNING, local->op_errno,
+                AFR_MSG_QUORUM_FAIL, "%s: Failing %s as quorum is not met",
+                file, gf_fop_list[local->op]);
+
         switch (local->transaction.type) {
         case AFR_ENTRY_TRANSACTION:
         case AFR_ENTRY_RENAME_TRANSACTION:
@@ -842,6 +843,13 @@ afr_changelog_post_op_now (call_frame_t *frame, xlator_t *this)
 		afr_changelog_post_op_done (frame, this);
                 goto out;
 	}
+
+        if (local->transaction.in_flight_sb) {
+                local->op_ret = -1;
+                local->op_errno = local->transaction.in_flight_sb_errno;
+                afr_changelog_post_op_done (frame, this);
+                goto out;
+        }
 
 	xattr = dict_new ();
 	if (!xattr) {
@@ -1060,11 +1068,11 @@ afr_changelog_pre_op_update (call_frame_t *frame, xlator_t *this)
 		if (!fd_ctx->on_disk[type]) {
 			for (i = 0; i < priv->child_count; i++)
 				fd_ctx->pre_op_done[type][i] =
-					local->transaction.pre_op[i];
+                                        (!local->transaction.failed_subvols[i]);
 		} else {
 			for (i = 0; i < priv->child_count; i++)
 				if (fd_ctx->pre_op_done[type][i] !=
-				    local->transaction.pre_op[i]) {
+				    (!local->transaction.failed_subvols[i])) {
 					local->transaction.no_uninherit = 1;
 					goto unlock;
 				}
@@ -1481,7 +1489,8 @@ afr_set_transaction_flock (xlator_t *this, afr_local_t *local)
         inodelk = afr_get_inodelk (int_lock, int_lock->domain);
         priv = this->private;
 
-        if (priv->arbiter_count) {
+        if (priv->arbiter_count &&
+            local->transaction.type == AFR_DATA_TRANSACTION) {
                 /*Lock entire file to avoid network split brains.*/
                 inodelk->flock.l_len   = 0;
                 inodelk->flock.l_start = 0;

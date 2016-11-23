@@ -633,6 +633,11 @@ cli_cmd_volume_create_parse (struct cli_state *state, const char **words,
                                 goto out;
                         index += ret;
                         type = GF_CLUSTER_TYPE_DISPERSE;
+                } else if ((strcmp (w, "arbiter") == 0)) {
+                        cli_err ("arbiter option must be preceded by replica "
+                                 "option.");
+                        ret = -1;
+                        goto out;
                 } else {
                         GF_ASSERT (!"opword mismatch");
                         ret = -1;
@@ -2565,7 +2570,7 @@ cli_cmd_gsync_set_parse (const char **words, int wordcount, dict_t **options)
          * volume geo-replication [$m [$s]] status [detail]
          * volume geo-replication [$m] $s config [[!]$opt [$val]]
          * volume geo-replication $m $s start|stop [force]
-         * volume geo-replication $m $s delete
+         * volume geo-replication $m $s delete [reset-sync-time]
          * volume geo-replication $m $s pause [force]
          * volume geo-replication $m $s resume [force]
          */
@@ -2688,6 +2693,22 @@ cli_cmd_gsync_set_parse (const char **words, int wordcount, dict_t **options)
                         goto out;
                 }
                 ret = dict_set_uint32 (dict, "status-detail", _gf_true);
+                if (ret)
+                        goto out;
+                cmdi++;
+        }
+
+        if (type == GF_GSYNC_OPTION_TYPE_DELETE &&
+            !strcmp ((char *)words[wordcount-1], "reset-sync-time")) {
+                if (strcmp ((char *)words[wordcount-2], "delete")) {
+                        ret = -1;
+                        goto out;
+                }
+                if (!slavei || !masteri) {
+                        ret = -1;
+                        goto out;
+                }
+                ret = dict_set_uint32 (dict, "reset-sync-time", _gf_true);
                 if (ret)
                         goto out;
                 cmdi++;
@@ -5156,7 +5177,7 @@ cli_cmd_bitrot_parse (const char **words, int wordcount, dict_t **options)
         char               *scrub_freq_values[]   = {"hourly",
                                                      "daily", "weekly",
                                                      "biweekly", "monthly",
-                                                      NULL};
+                                                     "minute",  NULL};
         char               *scrub_values[]        = {"pause", "resume",
                                                      "status", NULL};
         dict_t             *dict                  = NULL;

@@ -1678,6 +1678,7 @@ shard_common_lookup_shards (call_frame_t *frame, xlator_t *this, inode_t *inode,
                 bname = strrchr (path, '/') + 1;
                 loc.inode = inode_new (this->itable);
                 loc.parent = inode_ref (priv->dot_shard_inode);
+                gf_uuid_copy (loc.pargfid, priv->dot_shard_gfid);
                 ret = inode_path (loc.parent, bname, (char **) &(loc.path));
                 if (ret < 0 || !(loc.inode)) {
                         gf_msg (this->name, GF_LOG_ERROR, 0,
@@ -4629,7 +4630,7 @@ shard_common_inode_write_begin (call_frame_t *frame, xlator_t *this,
 
         gf_msg_trace (this->name, 0, "%s: gfid=%s first_block=%"PRIu32" "
                       "last_block=%"PRIu32" num_blocks=%"PRIu32" offset=%"PRId64""
-                      " total_size=%lu flags=%"PRId32"", gf_fop_list[fop],
+                      " total_size=%zu flags=%"PRId32"", gf_fop_list[fop],
                       uuid_utoa (fd->inode->gfid), local->first_block,
                       local->last_block, local->num_blocks, offset,
                       local->total_size, local->flags);

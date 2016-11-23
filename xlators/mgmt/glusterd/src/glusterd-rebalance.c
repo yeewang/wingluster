@@ -149,6 +149,7 @@ __glusterd_defrag_notify (struct rpc_clnt *rpc, void *mydata,
 
                 glusterd_store_perform_node_state_store (volinfo);
 
+                rpc_clnt_reconnect_cleanup (&defrag->rpc->conn);
                 glusterd_defrag_rpc_put (defrag);
                 if (defrag->cbk_fn)
                         defrag->cbk_fn (volinfo,
@@ -722,16 +723,18 @@ glusterd_op_stage_rebalance (dict_t *dict, char **op_errstr)
                                 peerinfo = glusterd_peerinfo_find_by_uuid
                                            (brickinfo->uuid);
                                 if (!peerinfo) {
-                                        gf_asprintf (op_errstr, "Host node of "
-                                                     "brick %s doesn't belong "
-                                                     "to cluster",
+                                        gf_asprintf (op_errstr, "Host node %s "
+                                                     "of brick %s doesn't "
+                                                     "belong to cluster",
+                                                     brickinfo->hostname,
                                                      brickinfo->path);
                                         ret = -1;
                                         rcu_read_unlock ();
                                         goto out;
                                 } else if (!peerinfo->connected) {
-                                        gf_asprintf (op_errstr, "Host node of "
-                                                     "brick %s is down",
+                                        gf_asprintf (op_errstr, "Host node %s "
+                                                     "of brick %s is down",
+                                                     brickinfo->hostname,
                                                      brickinfo->path);
                                         ret = -1;
                                         rcu_read_unlock ();

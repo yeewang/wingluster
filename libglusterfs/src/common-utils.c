@@ -3364,6 +3364,36 @@ gf_thread_create (pthread_t *thread, const pthread_attr_t *attr,
 }
 
 int
+gf_thread_create_detached (pthread_t *thread,
+                         void *(*start_routine)(void *), void *arg)
+{
+        pthread_attr_t attr;
+        int ret = -1;
+
+        ret = pthread_attr_init (&attr);
+        if (ret) {
+                gf_msg (THIS->name, GF_LOG_ERROR, ret,
+                        LG_MSG_PTHREAD_ATTR_INIT_FAILED,
+                        "Thread attribute initialization failed");
+                return -1;
+        }
+
+        pthread_attr_setdetachstate (&attr, PTHREAD_CREATE_DETACHED);
+
+        ret = gf_thread_create (thread, &attr, start_routine, arg);
+        if (ret) {
+                gf_msg (THIS->name, GF_LOG_ERROR, ret,
+                        LG_MSG_PTHREAD_FAILED,
+                        "Thread creation failed");
+                ret = -1;
+        }
+
+        pthread_attr_destroy (&attr);
+
+        return ret;
+}
+
+int
 gf_skip_header_section (int fd, int header_len)
 {
         int  ret           = -1;
@@ -4105,4 +4135,28 @@ gf_zero_fill_stat (struct iatt *buf)
 {
         buf->ia_nlink = 0;
         buf->ia_ctime = 0;
+}
+
+int
+gf_bits_count (uint64_t n)
+{
+        int val = 0;
+#ifdef _GNU_SOURCE
+        val = __builtin_popcountll (n);
+#else
+        n -= (n >> 1) & 0x5555555555555555ULL;
+        n = ((n >> 2) & 0x3333333333333333ULL) + (n & 0x3333333333333333ULL);
+        n = (n + (n >> 4)) & 0x0F0F0F0F0F0F0F0FULL;
+        n += n >> 8;
+        n += n >> 16;
+        n += n >> 32;
+        val = n & 0xFF;
+#endif
+        return val;
+}
+
+int
+gf_bits_index (uint64_t n)
+{
+    return ffsll(n) - 1;
 }

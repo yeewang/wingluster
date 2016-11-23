@@ -4551,7 +4551,7 @@ gf_cli_attach_tier (call_frame_t *frame, xlator_t *this,
 notify_cli:
         if (ret) {
                 cli_out ("Failed to run tier start. Please execute tier start "
-                         "command explictly");
+                         "command explicitly");
                 cli_out ("Usage : gluster volume rebalance <volname> tier "
                          "start");
         }
@@ -7765,7 +7765,7 @@ gf_cli_status_cbk (struct rpc_req *req, struct iovec *iov,
                         if (ret) {
                                 gf_log ("cli", GF_LOG_ERROR,
                                         "Error outputting to xml");
-                                goto out;
+                                goto xml_end;
                         }
                 }
                 if (cmd & GF_CLI_STATUS_TASKS) {
@@ -7774,17 +7774,18 @@ gf_cli_status_cbk (struct rpc_req *req, struct iovec *iov,
                         if (ret) {
                                 gf_log ("cli", GF_LOG_ERROR,"Error outputting "
                                         "to xml");
-                                goto out;
+                                goto xml_end;
                         }
                 } else {
                         ret = cli_xml_output_vol_status (local, dict);
                         if (ret) {
                                 gf_log ("cli", GF_LOG_ERROR,
                                         "Error outputting to xml");
-                                goto out;
+                                goto xml_end;
                         }
                 }
 
+xml_end:
                 if (!local->all) {
                         ret = cli_xml_output_vol_status_end (local);
                         if (ret) {
@@ -8029,7 +8030,7 @@ gf_cli_status_volume_all (call_frame_t *frame, xlator_t *this, void *data)
                 if (ret) {
                         gf_log ("cli", GF_LOG_ERROR,
                                 "Error outputting to xml");
-                        goto out;
+                        goto xml_end;
                 }
         }
 
@@ -8066,6 +8067,7 @@ gf_cli_status_volume_all (call_frame_t *frame, xlator_t *this, void *data)
                 dict_unref (dict);
         }
 
+xml_end:
         if (global_state->mode & GLUSTER_MODE_XML) {
                 ret = cli_xml_output_vol_status_end (local);
         }
@@ -9749,7 +9751,7 @@ cli_populate_req_dict_for_delete (dict_t *snap_dict, dict_t *dict, size_t index)
                 goto out;
         }
 
-        ret = snprintf (key, sizeof (key), "snapname%lu", index);
+        ret = snprintf (key, sizeof (key), "snapname%zu", index);
         if (ret < 0) {
                 goto out;
         }
@@ -9795,7 +9797,7 @@ cli_populate_req_dict_for_status (dict_t *snap_dict, dict_t *dict, int index) {
         GF_ASSERT (dict);
 
         ret = dict_set_uint32 (snap_dict, "sub-cmd",
-                               GF_SNAP_STATUS_TYPE_SNAP);
+                               GF_SNAP_STATUS_TYPE_ITER);
         if (ret) {
                 gf_log ("cli", GF_LOG_ERROR, "Could not save command "
                         "type in snap dict");
@@ -9887,7 +9889,8 @@ cli_snapshot_status (dict_t *dict, gf_cli_rsp *rsp,
                 goto out;
         }
 
-        if (status_cmd != GF_SNAP_STATUS_TYPE_SNAP) {
+        if ((status_cmd != GF_SNAP_STATUS_TYPE_SNAP) &&
+            (status_cmd != GF_SNAP_STATUS_TYPE_ITER)) {
                 dict_copy (dict, local->dict);
                 goto out;
         }
@@ -10370,7 +10373,8 @@ gf_cli_snapshot_for_status (call_frame_t *frame, xlator_t *this,
          * is already handled. Therefore we can return from here.
          * If want to get status of all snaps in the system or volume then
          * we should get them one by one.*/
-        if (cmd == GF_SNAP_STATUS_TYPE_SNAP) {
+        if ((cmd == GF_SNAP_STATUS_TYPE_SNAP) ||
+            (cmd == GF_SNAP_STATUS_TYPE_ITER)) {
                 ret = 0;
                 goto out;
         }
@@ -10829,6 +10833,8 @@ gf_cli_print_bitrot_scrub_status (dict_t *dict)
         uint64_t       seconds          = 0;
         char          *last_scrub       = NULL;
         uint64_t       error_count      = 0;
+        int8_t         scrub_running    = 0;
+        char          *scrub_state_op   = NULL;
 
 
         ret = dict_get_str (dict, "volname", &volname);
@@ -10865,9 +10871,25 @@ gf_cli_print_bitrot_scrub_status (dict_t *dict)
                 goto out;
         }
 
+        for (i = 1; i <= count; i++) {
+                memset (key, 0, 256);
+                snprintf (key, 256, "scrub-running-%d", i);
+                ret = dict_get_int8 (dict, key, &scrub_running);
+                if (ret)
+                        gf_log ("cli", GF_LOG_TRACE, "failed to get scrubbed "
+                                "files");
+                if (scrub_running)
+                        break;
+        }
+
+        if (scrub_running)
+                gf_asprintf (&scrub_state_op, "%s (In Progress)", state_scrub);
+        else
+                gf_asprintf (&scrub_state_op, "%s (Idle)", state_scrub);
+
         cli_out ("\n%s: %s\n", "Volume name ", volname);
 
-        cli_out ("%s: %s\n", "State of scrub", state_scrub);
+        cli_out ("%s: %s\n", "State of scrub", scrub_state_op);
 
         cli_out ("%s: %s\n", "Scrub impact", scrub_impact);
 
@@ -10977,6 +10999,7 @@ gf_cli_print_bitrot_scrub_status (dict_t *dict)
                  "===============");
 
 out:
+        GF_FREE (scrub_state_op);
         return 0;
 }
 

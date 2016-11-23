@@ -25,12 +25,14 @@ TEST $CLI volume set $V0 features.uss enable;
 
 EXPECT "1" is_snapd_running $V0
 
-SNAPD_PID=$(ps auxww | grep snapd | grep -v grep | awk '{print $2}');
+SNAPD_PID=$($CLI volume status $V0 | grep "Snapshot Daemon" | awk {'print $8'});
 
-TEST [ $SNAPD_PID -gt 0 ];
+TEST [ $SNAPD_PID -gt 0 ]
 
-SNAPD_PID2=$($CLI volume status $V0 | grep "Snapshot Daemon" | awk {'print $8'});
+kill -9 $SNAPD_PID
 
-TEST [ $SNAPD_PID -eq $SNAPD_PID2 ]
+SNAPD_PID=$($CLI volume status $V0 | grep "Snapshot Daemon" | awk {'print $8'});
+
+TEST [ $SNAPD_PID = 'N/A' ]
 
 cleanup  ;

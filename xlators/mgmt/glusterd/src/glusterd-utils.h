@@ -207,12 +207,11 @@ glusterd_add_volume_to_dict (glusterd_volinfo_t *volinfo,
                              char *prefix);
 int
 glusterd_get_brickinfo (xlator_t *this, const char *brickname,
-                        int port, gf_boolean_t localhost,
-                        glusterd_brickinfo_t **brickinfo);
+                        int port, glusterd_brickinfo_t **brickinfo);
 
 void
 glusterd_set_brick_status (glusterd_brickinfo_t  *brickinfo,
-                            gf_brick_status_t status);
+                           gf_brick_status_t status);
 
 gf_boolean_t
 glusterd_is_brick_started (glusterd_brickinfo_t  *brickinfo);
@@ -322,7 +321,9 @@ glusterd_get_local_brickpaths (glusterd_volinfo_t *volinfo,
 int32_t
 glusterd_recreate_bricks (glusterd_conf_t *conf);
 int32_t
-glusterd_handle_upgrade_downgrade (dict_t *options, glusterd_conf_t *conf);
+glusterd_handle_upgrade_downgrade (dict_t *options, glusterd_conf_t *conf,
+                                   gf_boolean_t upgrade,
+                                   gf_boolean_t downgrade);
 
 int
 glusterd_add_brick_detail_to_dict (glusterd_volinfo_t *volinfo,

@@ -582,7 +582,7 @@ off_t glfs_lseek (glfs_fd_t *fd, off_t offset, int whence) __THROW
         GFAPI_PUBLIC(glfs_lseek, 3.4.0);
 
 int glfs_truncate (glfs_t *fs, const char *path, off_t length) __THROW
-        GFAPI_PUBLIC(glfs_truncate, 3.4.0);
+        GFAPI_PUBLIC(glfs_truncate, 3.7.15);
 
 int glfs_ftruncate (glfs_fd_t *fd, off_t length) __THROW
         GFAPI_PUBLIC(glfs_ftruncate, 3.4.0);
@@ -695,14 +695,14 @@ int glfs_fchown (glfs_fd_t *fd, uid_t uid, gid_t gid) __THROW
         GFAPI_PUBLIC(glfs_fchown, 3.4.0);
 
 int glfs_utimens (glfs_t *fs, const char *path,
-                  struct timespec times[2]) __THROW
+                  const struct timespec times[2]) __THROW
         GFAPI_PUBLIC(glfs_utimens, 3.4.0);
 
 int glfs_lutimens (glfs_t *fs, const char *path,
-                   struct timespec times[2]) __THROW
+                   const struct timespec times[2]) __THROW
         GFAPI_PUBLIC(glfs_lutimens, 3.4.0);
 
-int glfs_futimens (glfs_fd_t *fd, struct timespec times[2]) __THROW
+int glfs_futimens (glfs_fd_t *fd, const struct timespec times[2]) __THROW
         GFAPI_PUBLIC(glfs_futimens, 3.4.0);
 
 ssize_t glfs_getxattr (glfs_t *fs, const char *path, const char *name,
@@ -777,9 +777,11 @@ int glfs_chdir (glfs_t *fs, const char *path) __THROW
 int glfs_fchdir (glfs_fd_t *fd) __THROW
         GFAPI_PUBLIC(glfs_fchdir, 3.4.0);
 
-char *glfs_realpath (glfs_t *fs, const char *path, char *resolved_path) __THROW
+char *glfs_realpath34 (glfs_t *fs, const char *path, char *resolved_path) __THROW
         GFAPI_PUBLIC(glfs_realpath, 3.4.0);
 
+char *glfs_realpath (glfs_t *fs, const char *path, char *resolved_path) __THROW
+        GFAPI_PUBLIC(glfs_realpath, 3.7.17);
 /*
  * @cmd and @flock are as specified in man fcntl(2).
  */

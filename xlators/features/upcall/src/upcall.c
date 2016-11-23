@@ -642,7 +642,7 @@ up_mkdir_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
         /* invalidate parent's entry too */
         flags = UP_TIMES;
         upcall_cache_invalidate (frame, this, client, local->inode, flags,
-                                 stbuf, postparent, NULL);
+                                 postparent, NULL, NULL);
 
 out:
         UPCALL_STACK_UNWIND (mkdir, frame, op_ret, op_errno,
@@ -704,7 +704,7 @@ up_create_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
         /* However invalidate parent's entry */
         flags = UP_TIMES;
         upcall_cache_invalidate (frame, this, client, local->inode, flags,
-                                 stbuf, postparent, NULL);
+                                 postparent, NULL, NULL);
 
 out:
         UPCALL_STACK_UNWIND (create, frame, op_ret, op_errno, fd,
@@ -1054,7 +1054,7 @@ up_mknod_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
         /* invalidate parent's entry too */
         flags = UP_TIMES;
         upcall_cache_invalidate (frame, this, client, local->inode, flags,
-                                 buf, postparent, NULL);
+                                 postparent, NULL, NULL);
 
 out:
         UPCALL_STACK_UNWIND (mknod, frame, op_ret, op_errno, inode, buf,
@@ -1115,7 +1115,7 @@ up_symlink_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
         /* invalidate parent's entry too */
         flags = UP_TIMES;
         upcall_cache_invalidate (frame, this, client, local->inode, flags,
-                                 buf, postparent, NULL);
+                                 postparent, NULL, NULL);
 
 out:
         UPCALL_STACK_UNWIND (symlink, frame, op_ret, op_errno, inode, buf,
@@ -1634,7 +1634,7 @@ reconfigure (xlator_t *this, dict_t *options)
                                 " Disabling cache_invalidation",
                                 strerror(errno));
                 }
-                priv->reaper_init_done = 1;
+                priv->reaper_init_done = _gf_true;
         }
 
 out:
@@ -1666,7 +1666,7 @@ init (xlator_t *this)
 
         this->private = priv;
         priv->fini = 0;
-        priv->reaper_init_done = 0;
+        priv->reaper_init_done = _gf_false;
 
         this->local_pool = mem_pool_new (upcall_local_t, 512);
         ret = 0;
@@ -1681,7 +1681,7 @@ init (xlator_t *this)
                                 " Disabling cache_invalidation",
                                 strerror(errno));
                 }
-                priv->reaper_init_done = 1;
+                priv->reaper_init_done = _gf_true;
         }
 out:
         if (ret) {
@@ -1704,7 +1704,8 @@ fini (xlator_t *this)
 
         priv->fini = 1;
 
-        pthread_join (priv->reaper_thr, NULL);
+        if (priv->reaper_init_done)
+                pthread_join (priv->reaper_thr, NULL);
 
         LOCK_DESTROY (&priv->inode_ctx_lk);
 
