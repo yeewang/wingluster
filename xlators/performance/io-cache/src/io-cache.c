@@ -2152,7 +2152,7 @@ struct volume_options options[] = {
           .type = GF_OPTION_TYPE_INT,
           .min  = 0,
           .max  = 60,
-          .default_value = "1",
+          .default_value = "0",
           .description = "The cached data for a file will be retained till "
           "'cache-refresh-timeout' seconds, after which data "
           "re-validation is performed."
@@ -2161,7 +2161,7 @@ struct volume_options options[] = {
           .type = GF_OPTION_TYPE_SIZET,
           .min  = 4 * GF_UNIT_MB,
           .max  = 32 * GF_UNIT_GB,
-          .default_value = "32MB",
+          .default_value = "64MB",
           .description = "Size of the read cache."
         },
         { .key  = {"min-file-size"},

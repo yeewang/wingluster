@@ -2763,7 +2763,7 @@ struct volume_options options[] = {
         },
         { .key   = {"ping-timeout"},
           .type  = GF_OPTION_TYPE_TIME,
-          .min   = 0,
+          .min   = 30,
           .max   = 1013,
           .default_value = "42",
           .description = "Time duration for which the client waits to "
@@ -2793,6 +2793,7 @@ struct volume_options options[] = {
          .type = GF_OPTION_TYPE_SIZET,
          .min  = GF_MIN_SOCKET_WINDOW_SIZE,
          .max  = GF_MAX_SOCKET_WINDOW_SIZE,
+         .default_value = 64 * 1024,
          .description = "Specifies the window size for tcp socket."
         },
         { .key   = {"filter-O_DIRECT"},

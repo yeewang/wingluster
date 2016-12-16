@@ -248,6 +248,9 @@ struct rpc_transport_ops {
                                    int addrlen, struct sockaddr_storage *sa,
                                    socklen_t sasize);
         int32_t (*throttle)       (rpc_transport_t *this, gf_boolean_t onoff);
+
+        /* ljs: probe the remote host port */
+        int32_t (*probe)          (char *addr, int timeout);
 };
 
 int32_t

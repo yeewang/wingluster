@@ -2156,7 +2156,7 @@ rpcsvc_transport_unix_options_build (dict_t **options, char *filepath)
         if (ret)
                 goto out;
 
-        ret = dict_set_str (dict, "transport.socket.nodelay", "off");
+        ret = dict_set_str (dict, "transport.socket.nodelay", "on");
         if (ret)
                 goto out;
 

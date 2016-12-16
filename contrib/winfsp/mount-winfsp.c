@@ -58,10 +58,6 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
         if (0 != passwd)
                 snprintf(idmap, sizeof idmap, "-ouid=%d,gid=%d", passwd->pw_uid, passwd->pw_gid);
 
-        passwd = getpwnam("yiwang");
-        if (0 != passwd)
-                snprintf(idmap, sizeof idmap, "-ouid=%d,gid=%d", passwd->pw_uid, passwd->pw_gid);
-
         /* convert cygwin path to Windows */
         winpath = create_winpath_from_cygpath (mountpoint);
         if (winpath == NULL) {
@@ -113,7 +109,6 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
 	if (fuse_is_lib_option("ac_attr_timeout="))
 		fuse_opt_add_arg(&args, "-oauto_cache,ac_attr_timeout=0");
 
-#if FUSE_VERSION >= 26
 	{
 		struct fuse_chan *ch;
 		char *mountpoint;
@@ -184,7 +179,6 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
 		fuse_destroy(fuse);
 		free(mountpoint);
 	}
-#endif
 
 	fuse_opt_free_args(&args);
 

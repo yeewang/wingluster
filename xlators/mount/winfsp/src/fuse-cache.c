@@ -16,7 +16,9 @@
 #include <pthread.h>
 
 #define DEFAULT_CACHE_TIMEOUT_SECS 20
-#define DEFAULT_MAX_CACHE_SIZE (128 * 1024)
+#define DEFAULT_CACHE_DIR_TIMEOUT_SECS 60
+#define DEFAULT_CACHE_LINK_TIMEOUT_SECS 20
+#define DEFAULT_MAX_CACHE_SIZE (2 * 1024 * 1024)
 #define DEFAULT_CACHE_CLEAN_INTERVAL_SECS 60
 #define DEFAULT_MIN_CACHE_CLEAN_INTERVAL_SECS 5
 
@@ -121,8 +123,21 @@ void cache_invalidate(const char *path)
 void cache_invalidate_write(const char *path)
 {
 	pthread_mutex_lock(&cache.lock);
-	// cache_purge(path); // remove ?
+	/* save the stat when writing? */
+	cache_purge(path);
 	cache.write_ctr++;
+	pthread_mutex_unlock(&cache.lock);
+}
+
+static void cache_invalidate_dir_0(const char *path)
+{
+	pthread_mutex_lock(&cache.lock);
+	cache_purge(path);
+
+        /* round over cache bug. */
+        if (strrchr(path, '/') == path) {
+                cache_purge_parent(path);
+        }
 	pthread_mutex_unlock(&cache.lock);
 }
 
@@ -612,8 +627,8 @@ static const struct fuse_opt cache_opts[] = {
 int cache_parse_options(struct fuse_args *args)
 {
 	cache.stat_timeout_secs = DEFAULT_CACHE_TIMEOUT_SECS;
-	cache.dir_timeout_secs = DEFAULT_CACHE_TIMEOUT_SECS;
-	cache.link_timeout_secs = DEFAULT_CACHE_TIMEOUT_SECS;
+	cache.dir_timeout_secs = DEFAULT_CACHE_DIR_TIMEOUT_SECS;
+	cache.link_timeout_secs = DEFAULT_CACHE_LINK_TIMEOUT_SECS;
 	cache.max_size = DEFAULT_MAX_CACHE_SIZE;
 	cache.clean_interval_secs = DEFAULT_CACHE_CLEAN_INTERVAL_SECS;
 	cache.min_clean_interval_secs = DEFAULT_MIN_CACHE_CLEAN_INTERVAL_SECS;

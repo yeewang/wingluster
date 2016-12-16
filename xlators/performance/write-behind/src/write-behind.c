@@ -2630,7 +2630,7 @@ struct volume_options options[] = {
           .type = GF_OPTION_TYPE_SIZET,
           .min  = 512 * GF_UNIT_KB,
           .max  = 1 * GF_UNIT_GB,
-          .default_value = "1MB",
+          .default_value = "64MB",
           .description = "Size of the write-behind buffer for a single file "
                          "(inode)."
         },

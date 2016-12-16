@@ -279,10 +279,10 @@ fuse_mount_sys (const char *mountpoint, char *fsname,
                         goto out;
                 }
 #ifndef GF_CYGWIN_HOST_OS
-		        ret = mount (source, mountpoint, fstype, mountflags,
-		                     mnt_param_mnt);
+	        ret = mount (source, mountpoint, fstype, mountflags,
+	                     mnt_param_mnt);
 #else
-				ret = mount (source, mountpoint, mountflags);
+		ret = mount (source, mountpoint, mountflags);
 #endif /* GF_CYGWIN_HOST_OS */
         }
 #endif /* GF_LINUX_HOST_OS */

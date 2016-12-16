@@ -673,6 +673,7 @@ winfsp_readdirp_cache(const char* path, fuse_cache_dirh_t* buf, fuse_cache_dirfi
 
         winfsp_send_req(msg);
 
+#if 0 // Save the source code due to enhance in the future.
         while (!end && 0) {
                 part = NULL;
                 pthread_mutex_lock(&params->mutex);
@@ -724,6 +725,7 @@ winfsp_readdirp_cache(const char* path, fuse_cache_dirh_t* buf, fuse_cache_dirfi
                         GF_FREE(part);
                 }
         }
+#endif
 
         ret = winfsp_get_result(msg);
 

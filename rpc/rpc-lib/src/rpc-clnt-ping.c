@@ -136,6 +136,20 @@ rpc_clnt_ping_timer_expired (void *rpc_ptr)
                         transport_activity = 1;
                 }
 
+                /* ljs: if traffic hangs until timer expires, try to connect remote. */
+                if (!transport_activity) {
+                        char peeraddr[1024] = {0};
+                        struct sockaddr_storage sastorage = {0,};
+                        int rtn = 0;
+
+                        rtn = trans->ops->get_peeraddr(trans, peeraddr, sizeof(peeraddr), &sastorage, sizeof(sastorage));
+                        if (rtn == 0 && trans->ops->probe) {
+                                rtn = trans->ops->probe(peeraddr, conn->ping_timeout);
+                                if (rtn == 0)
+                                        transport_activity = 1;
+                        }
+                }
+
                 if (transport_activity) {
                         gf_log (trans->name, GF_LOG_TRACE,
                                 "ping timer expired but transport activity "

@@ -26,7 +26,7 @@
 #define CLIENT_CMD_CONNECT    "trusted.glusterfs.client-connect"
 #define CLIENT_CMD_DISCONNECT "trusted.glusterfs.client-disconnect"
 #define CLIENT_DUMP_LOCKS     "trusted.glusterfs.clientlk-dump"
-#define GF_MAX_SOCKET_WINDOW_SIZE  (1 * GF_UNIT_MB)
+#define GF_MAX_SOCKET_WINDOW_SIZE  (128 * GF_UNIT_MB)
 #define GF_MIN_SOCKET_WINDOW_SIZE  (0)
 
 typedef enum {
