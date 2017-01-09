@@ -17,6 +17,6 @@ AM_CPPFLAGS = $(GF_CPPFLAGS) -I$(top_srcdir)/libglusterfs/src \
 	-I$(top_srcdir)/contrib/rbtree \
 	-I/usr/include/tirpc
 
-AM_CFLAGS = -Wall $(GF_CFLAGS) -I/usr/include/tirpc
+AM_CFLAGS = -Wall $(GF_CFLAGS) -I/usr/include/tirpc -I$(top_builddir)/../libuv-v1.9.1/include
 
 CLEANFILES = *~

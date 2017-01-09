@@ -34,6 +34,11 @@
 #include "mem-pool.h"
 #include "globals.h"
 
+#ifdef GF_CYGWIN_HOST_OS
+#include <uv.h>
+#endif
+
+
 #ifndef MAX_IOVEC
 #define MAX_IOVEC 16
 #endif /* MAX_IOVEC */
@@ -51,7 +56,7 @@
  * IB links.
  */
 #ifdef GF_CYGWIN_HOST_OS
-#define GF_DEFAULT_SOCKET_WINDOW_SIZE   (160 * GF_UNIT_KB)
+#define GF_DEFAULT_SOCKET_WINDOW_SIZE   (0 * GF_UNIT_KB)
 #else
 #define GF_DEFAULT_SOCKET_WINDOW_SIZE   (0)
 #endif
@@ -120,6 +125,19 @@ struct ioq {
         struct iovec      *pending_vector;
         int                pending_count;
         struct iobref     *iobref;
+};
+
+struct buf_ioq {
+        union {
+                struct list_head list;
+                struct {
+                        struct buf_ioq  *next;
+                        struct buf_ioq  *prev;
+                };
+        };
+
+        struct iovec       vector[MAX_IOVEC];
+        int                count;
 };
 
 typedef struct {
@@ -192,11 +210,23 @@ struct gf_sock_incoming {
         msg_type_t           msg_type;
         size_t               total_bytes_read;
 
+#ifdef NEVER
 	size_t               ra_read;
 	size_t               ra_max;
 	size_t               ra_served;
 	char                *ra_buf;
+#endif /* NEVER */
 };
+
+
+/* This macro looks complicated but it's not: it calculates the address
+ * of the embedding struct through the address of the embedded struct.
+ * In other words, if struct A embeds struct B, then we can obtain
+ * the address of A by taking the address of B and subtracting the
+ * field offset of B in A.
+ */
+#define CONTAINER_OF(ptr, type, field)                                        \
+  ((type *) ((char *) (ptr) - ((char *) &((type *) 0)->field)))
 
 typedef enum {
         OT_IDLE,        /* Uninitialized or termination complete. */
@@ -206,8 +236,38 @@ typedef enum {
         OT_PLEASE_DIE,  /* Poller termination requested. */
 } ot_state_t;
 
+#ifdef GF_CYGWIN_HOST_OS
+enum CONN_STATE {
+        c_busy,  /* Busy; waiting for incoming data or for a write to complete. */
+        c_done,  /* Done; read incoming data or write finished. */
+        c_stop,  /* Stopped. */
+        c_dead
+};
+#endif /* GF_CYGWIN_HOST_OS */
+
 typedef struct {
+#ifdef GF_CYGWIN_HOST_OS
+        uv_loop_t              loop;
+        uv_tcp_t               sock;
+
+        int                    rdstate;
+        int                    wrstate;
+        ssize_t                result;
+        uv_any_req             sock_req;
+        uv_buf_t               wr_buf[IOV_MAX];
+        uint64_t               wr_size;
+
+        union {
+                struct list_head        read_ioq;
+                struct {
+                        struct buf_ioq  *read_ioq_next;
+                        struct buf_ioq  *read_ioq_prev;
+                };
+        };
+#else
         int32_t                sock;
+#endif
+
         int32_t                idx;
         /* -1 = not connected. 0 = in progress. 1 = connected */
         char                   connected;
@@ -245,7 +305,12 @@ typedef struct {
 	char                  *ssl_private_key;
 	char                  *ssl_ca_list;
 	pthread_t              thread;
+#ifdef GF_CYGWIN_HOST_OS
+        uv_loop_t              local_loop;
+        uv_async_t             notify;
+#else
 	int                    pipe[2];
+#endif /* GF_CYGWIN_HOST_OS */
 	gf_boolean_t           own_thread;
         ot_state_t             ot_state;
         uint32_t               ot_gen;

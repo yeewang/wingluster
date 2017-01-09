@@ -2763,7 +2763,7 @@ struct volume_options options[] = {
         },
         { .key   = {"ping-timeout"},
           .type  = GF_OPTION_TYPE_TIME,
-          .min   = 30,
+          .min   = 0,
           .max   = 1013,
           .default_value = "42",
           .description = "Time duration for which the client waits to "

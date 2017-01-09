@@ -58,6 +58,19 @@ event_pool_new (int count, int eventthreadcount)
         return event_pool;
 }
 
+int
+event_new_on_poll (struct event_pool *event_pool,
+                   uv_loop_t **loop,
+                   uv_handle_t **handle)
+{
+        int ret = -1;
+
+        GF_VALIDATE_OR_GOTO ("event", event_pool, out);
+
+        ret = event_pool->ops->event_new_on_poll (event_pool, loop, handle);
+out:
+        return ret;
+}
 
 int
 event_register (struct event_pool *event_pool, int fd,

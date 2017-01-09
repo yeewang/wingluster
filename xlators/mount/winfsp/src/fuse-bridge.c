@@ -1046,28 +1046,14 @@ fuse_setattr(xlator_t* this, winfsp_msg_t* msg)
 {
         winfsp_setattr_t *args = (winfsp_setattr_t *)msg->args;
         fuse_in_header_t* finh = msg->finh;
-        fuse_private_t* priv = NULL;
         fuse_state_t* state = NULL;
 
-        if (args->fi) {
-                FILL_STATE(msg, this, finh, NULL, state);
+        FILL_STATE(msg, this, finh, args->path, state);
 
-                state->stub = msg;
-                state->fd = FH_TO_FD(args->fi->fh);
+        state->stub = msg;
 
-                fuse_resolve_fd_init(state, &state->resolve, state->fd);
-        }
-        else {
-                FILL_STATE(msg, this, finh, args->path, state);
-
-                state->stub = msg;
-
-                fuse_resolve_inode_init(state, &state->resolve,
-                                        finh->nodeid);
-        }
-
-        priv = this->private;
-
+        fuse_resolve_inode_init(state, &state->resolve,
+                                finh->nodeid);
         state->valid = args->valid;
 
         if (args->valid & (FATTR_ATIME | FATTR_MTIME)) {
@@ -1078,11 +1064,18 @@ fuse_setattr(xlator_t* this, winfsp_msg_t* msg)
         }
 
         if (args->valid & (FATTR_UID | FATTR_GID)) {
+                gf_log("glusterfs-fuse", GF_LOG_DEBUG,
+                       "%" PRIu64 ": fuse_setattr uid|gid => %s,%d|%d",
+                       state->finh->unique, args->path, args->uid, args->gid);
+
                 state->attr.ia_uid = args->uid;
                 state->attr.ia_gid = args->gid;
         }
 
         if (args->valid & (FATTR_MODE)) {
+                gf_log("glusterfs-fuse", GF_LOG_DEBUG,
+                       "%" PRIu64 ": fuse_setattr mode => %s,0%o",
+                       state->finh->unique, args->path, args->mode);
                 state->attr.ia_prot = ia_prot_from_st_mode(args->mode);
         }
 
@@ -5452,6 +5445,11 @@ init(xlator_t* this_xl)
                 return -1;
 
         set_fuse_xlator(this_xl);
+
+        /*
+        How to set log level in a xlator?
+        gf_log_set_xl_loglevel (this_xl, GF_LOG_DEBUG);
+        */
 
         options = this_xl->options;
 

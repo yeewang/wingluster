@@ -3336,8 +3336,6 @@ gf_thread_create (pthread_t *thread, const pthread_attr_t *attr,
 {
         sigset_t set, old;
         int ret;
-        int policy;
-        struct sched_param param;
 
         sigemptyset (&set);
 
@@ -3352,11 +3350,6 @@ gf_thread_create (pthread_t *thread, const pthread_attr_t *attr,
         pthread_sigmask (SIG_BLOCK, &set, &old);
 
         ret = pthread_create (thread, attr, start_routine, arg);
-
-#ifdef GF_CYGWIN_HOST_OS
-        param.sched_priority = 20;
-        pthread_setschedparam(thread, SCHED_FIFO, param.sched_priority);
-#endif /* GF_CYGWIN_HOST_OS */
 
         pthread_sigmask (SIG_SETMASK, &old, NULL);
 

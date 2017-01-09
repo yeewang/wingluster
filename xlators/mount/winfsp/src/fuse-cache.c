@@ -123,8 +123,9 @@ void cache_invalidate(const char *path)
 void cache_invalidate_write(const char *path)
 {
 	pthread_mutex_lock(&cache.lock);
-	/* save the stat when writing? */
+	/* save the stat when writing.
 	cache_purge(path);
+	*/
 	cache.write_ctr++;
 	pthread_mutex_unlock(&cache.lock);
 }

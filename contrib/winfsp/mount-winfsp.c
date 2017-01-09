@@ -56,7 +56,7 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
         /* get uid/gid from local user name */
         passwd = getpwuid(getuid());
         if (0 != passwd)
-                snprintf(idmap, sizeof idmap, "-ouid=%d,gid=%d", passwd->pw_uid, passwd->pw_gid);
+                snprintf(idmap, sizeof idmap, "-ouid=%d,gid=%d,umask=0", passwd->pw_uid, passwd->pw_gid);
 
         /* convert cygwin path to Windows */
         winpath = create_winpath_from_cygpath (mountpoint);

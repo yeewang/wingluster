@@ -1,6 +1,7 @@
 libglusterfs_la_CFLAGS = $(GF_CFLAGS) $(GF_DARWIN_LIBGLUSTERFS_CFLAGS) \
 	-DDATADIR=\"$(localstatedir)\" \
-	-I/usr/include/tirpc
+	-I/usr/include/tirpc \
+	-I$(top_builddir)/../cyguv/libuv/include
 
 libglusterfs_la_CPPFLAGS = $(GF_CPPFLAGS) -D__USE_FILE_OFFSET64 \
 	-DXLATORDIR=\"$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator\" \
@@ -10,7 +11,7 @@ libglusterfs_la_CPPFLAGS = $(GF_CPPFLAGS) -D__USE_FILE_OFFSET64 \
 	-DSBIN_DIR=\"$(sbindir)\" -I$(CONTRIBDIR)/timer-wheel \
 	-I/usr/include/tirpc
 
-libglusterfs_la_LIBADD = $(ZLIB_LIBS) $(MATH_LIB) $(UUID_LIBS) -ltirpc
+libglusterfs_la_LIBADD = $(ZLIB_LIBS) $(MATH_LIB) $(UUID_LIBS) -ltirpc -luv-1.9.1
 libglusterfs_la_LDFLAGS = -version-info $(LIBGLUSTERFS_LT_VERSION) -no-undefined
 #    -Wl,--out-implib=lib${module}.dll.a \
 #    -Wl,--export-all-symbols \
@@ -29,7 +30,7 @@ libglusterfs_la_SOURCES = dict.c xlator.c logging.c \
 	iobuf.c globals.c statedump.c stack.c checksum.c daemon.c timespec.c \
 	$(CONTRIBDIR)/rbtree/rb.c rbthash.c store.c latency.c \
 	graph.c syncop.c graph-print.c trie.c run.c options.c fd-lk.c \
-	circ-buff.c event-history.c gidcache.c ctx.c client_t.c event-poll.c \
+	circ-buff.c event-history.c gidcache.c ctx.c client_t.c \
 	event-epoll.c syncop-utils.c cluster-syncop.c refcount.c \
 	$(CONTRIBDIR)/libgen/basename_r.c \
 	$(CONTRIBDIR)/libgen/dirname_r.c \
@@ -38,6 +39,12 @@ libglusterfs_la_SOURCES = dict.c xlator.c logging.c \
 	$(CONTRIBDIR)/libexecinfo/execinfo.c quota-common-utils.c rot-buffs.c \
 	$(CONTRIBDIR)/timer-wheel/timer-wheel.c \
 	$(CONTRIBDIR)/timer-wheel/find_last_bit.c tw.c throttle-tbf.c
+
+if GF_CYGWIN_HOST_OS
+libglusterfs_la_SOURCES += event-poll-win32.c
+else 
+libglusterfs_la_SOURCES += event-poll.c
+endif
 
 nodist_libglusterfs_la_SOURCES = y.tab.c graph.lex.c
 
