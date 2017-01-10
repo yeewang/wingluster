@@ -17,6 +17,68 @@
 #endif
 
 
+struct idmap_config {
+    char   *name;       /* username */
+    char   *passwd;     /* user password */
+    int     uid;        /* user ID */
+    int     gid;        /* group ID */
+    char   *gecos;      /* user information */
+    char   *dir;        /* home directory */
+    char   *shell;      /* shell program */
+};
+
+int read_config(struct idmap_config* configs, int *count)
+{
+        FILE *fin;
+        int n = 0;
+        char line[1024];
+        char *token;
+        char *saveptr;
+
+        fin = fopen("/etc/idmap.conf", "rt");
+        if (fin == NULL)
+                return -1;
+
+        while (fgets(line, sizeof(line), fin) != NULL) {
+                if (line[0] == '#' || line[0] == ' ' || line[0] == '\n')
+                        continue;
+
+                if (configs) {
+                        token = strtok_r(line, ":", &saveptr);
+                        if (token)
+                                configs[n].name = strdup(token);
+                        else
+                                configs[n].name = NULL;
+
+                        token = strtok_r(NULL, ":", &saveptr);
+                        if (token)
+                                configs[n].passwd = strdup(token);
+                        else
+                                configs[n].passwd = NULL;
+
+                        token = strtok_r(NULL, ":", &saveptr);
+                        if (token)
+                                configs[n].uid = atoi(token);
+                        else
+                                configs[n].uid = -1;
+
+                        token = strtok_r(NULL, ":", &saveptr);
+                        if (token)
+                                configs[n].gid = atoi(token);
+                        else
+                                configs[n].gid = -1;
+                }
+
+                n++;
+        }
+
+        *count = n;
+
+        fclose(fin);
+
+        return 0;
+}
+
 /* Conversion from cygwin path to windows path */
 char *
 create_winpath_from_cygpath(const char *cygpath)
@@ -51,12 +113,39 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
         struct passwd *passwd;
         struct fuse *fuse = NULL;
         char *winpath = NULL;
+        struct idmap_config *configs;
+        int count, i;
 	int res;
 
+        /* step 1: get uid/gid from local user name */
         /* get uid/gid from local user name */
         passwd = getpwuid(getuid());
         if (0 != passwd)
                 snprintf(idmap, sizeof idmap, "-ouid=%d,gid=%d,umask=0", passwd->pw_uid, passwd->pw_gid);
+
+        /* step 2: use idmap.conf to update uid, gid*/
+        configs = NULL;
+        if (read_config(NULL, &count) == 0) {
+                configs = (struct idmap_config *)malloc(sizeof(struct idmap_config) * count);
+                if (configs)
+                        read_config(configs, &count);
+
+                i = 0;
+                while (i < count) {
+                        if (strcmp(configs[i].name, "*") == 0) {
+                                snprintf(idmap, sizeof idmap, "-ouid=%d,gid=%d,umask=0",
+                                        configs[i].uid, configs[i].gid);
+                                break;
+                        }
+                        else if (strcmp(configs[i].name, "*") == 0) {
+                                snprintf(idmap, sizeof idmap, "-ouid=%d,gid=%d,umask=0",
+                                        configs[i].uid, configs[i].gid);
+                        }
+                        i++;
+                }
+
+                free(configs);
+        }
 
         /* convert cygwin path to Windows */
         winpath = create_winpath_from_cygpath (mountpoint);
@@ -102,7 +191,7 @@ gf_fuse_mount (const char *mountpoint, char *fsname,
                 goto out;
         }
 
-	//fuse_opt_add_arg(&args, "-d");
+	fuse_opt_add_arg(&args, "-d");
         fuse_opt_add_arg(&args, "-f");
         fuse_opt_add_arg(&args, idmap);
 

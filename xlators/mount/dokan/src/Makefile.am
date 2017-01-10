@@ -21,12 +21,12 @@ dokan_la_SOURCES = fuse-helpers.c fuse-resolve.c fuse-bridge.c dokan-bridge.c \
 dokan_la_LDFLAGS = -module -avoid-version  -no-undefined
 dokan_la_LIBADD = $(GF_LDADD) $(top_builddir)/libglusterfs/src/libglusterfs.la
 
-AM_CPPFLAGS = $(GF_CPPFLAGS) $(GF_FUSE_CFLAGS) \
+AM_CPPFLAGS = $(GF_CPPFLAGS) $(GF_FUSE_CFLAGS) -pg \
 	-I$(top_srcdir)/libglusterfs/src -I$(CONTRIBDIR)/fuse-include \
 	-I$(CONTRIBDIR)/fuse-lib \
 	-I$(dokan_dir)/dokan_fuse/include -D_FILE_OFFSET_BITS=64 -L$(dokan_dir)/dokan_fuse -ldokanfuse1
 
-AM_CFLAGS = -Wall $(GF_CFLAGS) $(GF_FUSE_CFLAGS) \
+AM_CFLAGS = -Wall $(GF_CFLAGS) $(GF_FUSE_CFLAGS) -pg \
 	-I$(dokan_dir)/dokan_fuse/include -D_FILE_OFFSET_BITS=64 -L$(dokan_dir)/dokan_fuse -ldokanfuse1
 
 CLEANFILES =

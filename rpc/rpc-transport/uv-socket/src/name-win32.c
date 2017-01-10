@@ -9,18 +9,15 @@
 */
 
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <errno.h>
-#include <netdb.h>
 #include <string.h>
 
 #ifndef AF_INET_SDP
 #define AF_INET_SDP 27
 #endif
 
-#include "rpc-transport.h"
 #include "socket.h"
+#include "rpc-transport.h"
 #include "common-utils.h"
 
 

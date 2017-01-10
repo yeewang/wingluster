@@ -1289,6 +1289,14 @@ winfsp_get_req(int type, size_t size)
 
         INIT_FUSE_HEADER(msg->finh, msg->unique, type, ctx);
 
+        msg->finh->pid = 0;
+        msg->finh->uid = 0;
+        msg->finh->gid = 0;
+
+        gf_log("glusterfs-fuse", GF_LOG_DEBUG,
+               "winfsp_get_req with Auth Info: pid=%d, uid=%d, gid=%d",
+               msg->finh->pid, msg->finh->uid, msg->finh->gid);
+
         pthread_mutex_init(&msg->mutex, NULL);
         pthread_cond_init(&msg->cond, NULL);
 

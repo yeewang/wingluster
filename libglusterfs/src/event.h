@@ -118,10 +118,6 @@ struct event_ops {
 struct event_ops {
         struct event_pool * (*new) (int count, int eventthreadcount);
 
-        int (*event_new_on_poll) (struct event_pool *event_pool,
-                                  uv_loop_t **loop,
-                                  uv_handle_t **handle);
-
         int (*event_register) (struct event_pool *event_pool, uv_handle_t *fd,
                                event_handler_t handler,
                                void *data, int poll_in, int poll_out);
@@ -143,10 +139,6 @@ struct event_ops {
 #endif
 
 struct event_pool *event_pool_new (int count, int eventthreadcount);
-int
-event_new_on_poll (struct event_pool *event_pool,
-                   uv_loop_t **loop,
-                   uv_handle_t **handle);
 int event_select_on (struct event_pool *event_pool, int fd, int idx,
 		     int poll_in, int poll_out);
 int event_register (struct event_pool *event_pool, int fd,

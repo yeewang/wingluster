@@ -151,14 +151,6 @@ event_pool_new_poll (int count, int eventthreadcount)
 }
 
 static int
-event_new_on_poll (struct event_pool *event_pool,
-                   uv_loop_t **loop,
-                   uv_handle_t **handle)
-{
-        return 0;
-}
-
-static int
 event_register_poll (struct event_pool *event_pool, struct sockaddr *fd,
                      event_handler_t handler,
                      void *data, int poll_in, int poll_out)

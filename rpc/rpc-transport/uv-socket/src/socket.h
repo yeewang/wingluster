@@ -27,16 +27,14 @@
 #include "config.h"
 #endif
 
+#include <uv.h>
+
 #include "event.h"
 #include "rpc-transport.h"
 #include "logging.h"
 #include "dict.h"
 #include "mem-pool.h"
 #include "globals.h"
-
-#ifdef GF_CYGWIN_HOST_OS
-#include <uv.h>
-#endif
 
 
 #ifndef MAX_IOVEC
@@ -210,12 +208,10 @@ struct gf_sock_incoming {
         msg_type_t           msg_type;
         size_t               total_bytes_read;
 
-#ifdef NEVER
 	size_t               ra_read;
 	size_t               ra_max;
 	size_t               ra_served;
 	char                *ra_buf;
-#endif /* NEVER */
 };
 
 
@@ -246,7 +242,6 @@ enum CONN_STATE {
 #endif /* GF_CYGWIN_HOST_OS */
 
 typedef struct {
-#ifdef GF_CYGWIN_HOST_OS
         uv_loop_t              loop;
         uv_tcp_t              *sock;
 
@@ -260,7 +255,7 @@ typedef struct {
         int                    rdstate;
         int                    wrstate;
         ssize_t                result;
-        uv_any_req             sock_req;
+        union uv_any_req       sock_req;
         uv_buf_t               wr_buf[IOV_MAX];
         uint64_t               wr_size;
 
@@ -271,9 +266,6 @@ typedef struct {
                         struct buf_ioq  *read_ioq_prev;
                 };
         };
-#else
-        int32_t                sock;
-#endif
 
         int32_t                idx;
         /* -1 = not connected. 0 = in progress. 1 = connected */
