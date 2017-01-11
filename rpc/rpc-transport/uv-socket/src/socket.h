@@ -134,8 +134,7 @@ struct buf_ioq {
                 };
         };
 
-        struct iovec       vector[MAX_IOVEC];
-        int                count;
+        struct iovec       vector;
 };
 
 typedef struct {
@@ -243,19 +242,26 @@ enum CONN_STATE {
 
 typedef struct {
         uv_loop_t              loop;
-        uv_tcp_t              *sock;
 
         union {
                 uv_handle_t handle;
                 uv_stream_t stream;
                 uv_tcp_t sock;
                 uv_udp_t udp;
-        } handle;
+        }                      handle;
 
         int                    rdstate;
         int                    wrstate;
         ssize_t                result;
-        union uv_any_req       sock_req;
+
+        union {
+          uv_getaddrinfo_t addrinfo_req;
+          uv_connect_t connect_req;
+          uv_req_t req;
+        }                      read_req;
+
+        uv_timer_t             timer_handle;
+        uv_write_t             write_req;
         uv_buf_t               wr_buf[IOV_MAX];
         uint64_t               wr_size;
 
