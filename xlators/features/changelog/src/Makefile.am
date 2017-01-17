@@ -17,10 +17,16 @@ changelog_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la \
 
 AM_CPPFLAGS = $(GF_CPPFLAGS) -I$(top_srcdir)/libglusterfs/src \
 	      -I$(top_srcdir)/rpc/xdr/src -I$(top_srcdir)/rpc/rpc-lib/src \
-	      -I$(top_srcdir)/rpc/rpc-transport/socket/src \
 	      -I$(top_srcdir)/xlators/features/changelog/lib/src/ \
 	      -fPIC -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -D$(GF_HOST_OS) \
 	      -DDATADIR=\"$(localstatedir)\"
+		  
+if GF_CYGWIN_HOST_OS
+AM_CPPFLAGS += -I$(top_srcdir)/rpc/rpc-transport/uv-socket/src \
+		  -I$(top_builddir)/../cyguv/libuv/include
+else
+AM_CPPFLAGS += -I$(top_srcdir)/rpc/rpc-transport/socket/src
+endif
 
 AM_CFLAGS = -Wall $(GF_CFLAGS)
 

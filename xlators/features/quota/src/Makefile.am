@@ -15,7 +15,8 @@ noinst_HEADERS = quota-mem-types.h quota.h quotad-aggregator.h \
 
 AM_CPPFLAGS = $(GF_CPPFLAGS) -I$(top_srcdir)/libglusterfs/src \
 	-I$(top_srcdir)/xlators/cluster/dht/src -I$(top_srcdir)/rpc/xdr/src/ \
-	-I$(top_srcdir)/rpc/rpc-lib/src
+	-I$(top_srcdir)/rpc/rpc-lib/src \
+	-I$(top_builddir)/../cyguv/libuv/include
 
 AM_CFLAGS = -Wall $(GF_CFLAGS)
 

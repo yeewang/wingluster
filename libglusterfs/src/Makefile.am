@@ -26,7 +26,7 @@ CONTRIB_BUILDDIR = $(top_builddir)/contrib
 
 libglusterfs_la_SOURCES = dict.c xlator.c logging.c \
 	hashfn.c defaults.c common-utils.c timer.c inode.c call-stub.c \
-	compat.c fd.c compat-errno.c event.c mem-pool.c gf-dirent.c syscall.c \
+	compat.c fd.c compat-errno.c mem-pool.c gf-dirent.c syscall.c \
 	iobuf.c globals.c statedump.c stack.c checksum.c daemon.c timespec.c \
 	$(CONTRIBDIR)/rbtree/rb.c rbthash.c store.c latency.c \
 	graph.c syncop.c graph-print.c trie.c run.c options.c fd-lk.c \
@@ -41,9 +41,9 @@ libglusterfs_la_SOURCES = dict.c xlator.c logging.c \
 	$(CONTRIBDIR)/timer-wheel/find_last_bit.c tw.c throttle-tbf.c
 
 if GF_CYGWIN_HOST_OS
-libglusterfs_la_SOURCES += event-poll-win32.c
+libglusterfs_la_SOURCES += event-win32.c event-poll-win32.c
 else 
-libglusterfs_la_SOURCES += event-poll.c
+libglusterfs_la_SOURCES += event.c event-poll.c
 endif
 
 nodist_libglusterfs_la_SOURCES = y.tab.c graph.lex.c

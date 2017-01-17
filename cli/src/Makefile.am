@@ -21,6 +21,11 @@ AM_CPPFLAGS = $(GF_CPPFLAGS) \
 	-DSYNCDAEMON_COMPILE=$(SYNCDAEMON_COMPILE) -DSBIN_DIR=\"$(sbindir)\"\
 	$(XML_CPPFLAGS)
 
+if GF_CYGWIN_HOST_OS
+AM_CPPFLAGS += \
+		  -I$(top_builddir)/../cyguv/libuv/include
+endif
+
 AM_CFLAGS = -Wall $(GF_CFLAGS)
 
 CLEANFILES =

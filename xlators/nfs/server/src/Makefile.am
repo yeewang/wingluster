@@ -24,6 +24,11 @@ AM_CPPFLAGS = $(GF_CPPFLAGS) \
 	-I$(nfsrpclibdir) -I$(CONTRIBDIR)/rbtree \
 	-I$(top_srcdir)/rpc/xdr/src/ -DDATADIR=\"$(localstatedir)\"
 
+if GF_CYGWIN_HOST_OS
+AM_CPPFLAGS += \
+		  -I$(top_builddir)/../cyguv/libuv/include
+endif
+
 AM_CFLAGS = -Wall $(GF_CFLAGS)
 
 AM_LDFLAGS = -L$(xlatordir)

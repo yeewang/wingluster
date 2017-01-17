@@ -276,7 +276,6 @@ typedef struct {
                 };
         };
 
-        int32_t                idx;
         /* -1 = not connected. 0 = in progress. 1 = connected */
         char                   connected;
         char                   bio;

@@ -210,12 +210,10 @@ struct gf_sock_incoming {
         msg_type_t           msg_type;
         size_t               total_bytes_read;
 
-#ifdef NEVER
 	size_t               ra_read;
 	size_t               ra_max;
 	size_t               ra_served;
 	char                *ra_buf;
-#endif /* NEVER */
 };
 
 
@@ -247,15 +245,12 @@ enum CONN_STATE {
 
 typedef struct {
 #ifdef GF_CYGWIN_HOST_OS
-        uv_loop_t              loop;
-        uv_tcp_t              *sock;
-
         union {
                 uv_handle_t handle;
                 uv_stream_t stream;
                 uv_tcp_t sock;
                 uv_udp_t udp;
-        } handle;
+        }                      handle;
 
         int                    rdstate;
         int                    wrstate;

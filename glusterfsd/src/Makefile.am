@@ -14,6 +14,11 @@ AM_CPPFLAGS = $(GF_CPPFLAGS) \
 	-DXLATORDIR=\"$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator\" \
 	-I$(top_srcdir)/rpc/rpc-lib/src -I$(top_srcdir)/rpc/xdr/src \
 	-I$(top_srcdir)/xlators/nfs/server/src
+	
+if GF_CYGWIN_HOST_OS
+AM_CPPFLAGS += \
+		  -I$(top_builddir)/../cyguv/libuv/include
+endif
 
 AM_CFLAGS = -Wall $(GF_CFLAGS)
 

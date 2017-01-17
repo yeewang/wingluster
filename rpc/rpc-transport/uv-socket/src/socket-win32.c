@@ -880,9 +880,8 @@ __socket_reset (rpc_transport_t *this)
 
         memset (&priv->incoming, 0, sizeof (priv->incoming));
 
-        event_unregister_close (this->ctx->event_pool, priv->idx);
+        event_unregister_close (this->ctx->event_pool, &priv->handle);
 
-        priv->idx = -1;
         priv->connected = -1;
 
 out:
@@ -1070,8 +1069,8 @@ __socket_ioq_churn (rpc_transport_t *this)
 
         if (!priv->own_thread && list_empty (&priv->ioq)) {
                 /* all pending writes done, not interested in POLLOUT */
-                priv->idx = event_select_on (this->ctx->event_pool,
-                                             priv->idx, -1, 0);
+                event_select_on (this->ctx->event_pool,
+                                 &priv->handle, -1, 0);
         }
 
 out:
@@ -2722,13 +2721,12 @@ socket_server_event_handler (rpc_transport_t * this)
                                 }
 #endif /* NEVER */
                         }  else {
-                                new_priv->idx =
-                                        event_register (ctx->event_pool,
-                                                        socket_connect_init,
-                                                        socket_event_handler,
-                                                        new_trans,
-                                                        1, 0);
-                                if (new_priv->idx == -1) {
+                                ret = event_register (ctx->event_pool,
+                                                      socket_connect_init,
+                                                      socket_event_handler,
+                                                      &new_priv->handle,
+                                                      1, 0);
+                                if (ret != 0) {
                                         ret = -1;
                                         gf_log(this->name, GF_LOG_ERROR,
                                                "failed to register the socket with event");
@@ -2983,15 +2981,15 @@ socket_connect_cb(uv_connect_t *req, int status)
 static int
 socket_connect_init(uv_loop_t *loop, void * data)
 {
-        rpc_transport_t * this;
+        rpc_transport_t * this = NULL;
         socket_private_t *priv = NULL;
         uv_tcp_t *sock = NULL;
         uv_connect_t *req = NULL;
         char *cname = NULL;
         int ret = -1;
 
-        this = data;
-        priv = this->private;
+        priv = CONTAINER_OF(data, socket_private_t, handle);
+        this = CONTAINER_OF(priv, rpc_transport_t, private);
         sock = &priv->handle.sock;
         req = &priv->read_req.connect_req;;
 
@@ -3160,16 +3158,25 @@ socket_connect (rpc_transport_t *this, int port)
 #endif /* NEVER */
                 }
                 else {
-                        priv->idx = event_register (ctx->event_pool,
-                                                    socket_connect_init,
-                                                    socket_event_handler,
-                                                    this, 1, 1);
-                        if (priv->idx == -1) {
+                        gf_log (this->name, GF_LOG_DEBUG,
+                                "cccccccccccccccccc %p, state=%u gen=%u sock=%p", this,
+                                priv->ot_state, priv->ot_gen, &priv->handle.sock);
+
+                        ret = event_register (ctx->event_pool,
+                                              socket_connect_init,
+                                              socket_event_handler,
+                                              &priv->handle, 1, 1);
+                        if (ret != 0) {
                                 gf_log ("", GF_LOG_WARNING,
                                         "failed to register the event");
                                 uv_close(&priv->handle.handle, NULL);
                                 ret = -1;
                         }
+
+                        gf_log (this->name, GF_LOG_DEBUG,
+                                "ddddddddddddddddd %p, state=%u gen=%u sock=%p", this,
+                                priv->ot_state, priv->ot_gen, &priv->handle.sock);
+
                 }
         }
 unlock:
@@ -3227,15 +3234,9 @@ socket_listen_init(uv_loop_t *loop, void *data)
         uv_tcp_t *sock;
         int ret = -1;
 
-        this = data;
-        priv = this->private;
+        priv = CONTAINER_OF(data, socket_private_t, handle);
+        this = CONTAINER_OF(priv, rpc_transport_t, private);
         sock = &priv->handle.sock;
-
-        pthread_mutex_lock (&priv->lock);
-        {
-                //priv->idx = idx;
-        }
-        pthread_mutex_unlock (&priv->lock);
 
         ret = uv_tcp_init(loop, sock);
         if (ret != 0) {
@@ -3306,12 +3307,12 @@ socket_listen (rpc_transport_t *this)
 
                 rpc_transport_ref (this);
 
-                priv->idx = event_register (ctx->event_pool,
-                                            socket_listen_init,
-                                            socket_event_handler,
-                                            this, 1, 0);
+                ret = event_register (ctx->event_pool,
+                                      socket_listen_init,
+                                      socket_event_handler,
+                                      &priv->handle, 1, 0);
 
-                if (priv->idx == -1) {
+                if (ret != 0) {
                         gf_log (this->name, GF_LOG_WARNING,
                                 "could not register socket %p with events",
                                 &priv->handle.sock);
@@ -3369,8 +3370,8 @@ socket_submit_request (rpc_transport_t *this, rpc_transport_req_t *req)
                 }
                 if (!priv->own_thread && need_poll_out) {
                         /* first entry to wait. continue writing on POLLOUT */
-                        priv->idx = event_select_on (ctx->event_pool,
-                                                     priv->idx, -1, 1);
+                        event_select_on (ctx->event_pool,
+                                         &priv->handle, -1, 1);
                 }
         }
 unlock:
@@ -3423,8 +3424,8 @@ socket_submit_reply (rpc_transport_t *this, rpc_transport_reply_t *reply)
                 }
                 if (!priv->own_thread && need_poll_out) {
                         /* first entry to wait. continue writing on POLLOUT */
-                        priv->idx = event_select_on (ctx->event_pool,
-                                                     priv->idx, -1, 1);
+                        event_select_on (ctx->event_pool,
+                                         &priv->handle, -1, 1);
                 }
         }
 unlock:
@@ -3536,9 +3537,9 @@ socket_throttle (rpc_transport_t *this, gf_boolean_t onoff)
                  * registered fd mapping. */
 
                 if (priv->connected == 1)
-                        priv->idx = event_select_on (this->ctx->event_pool,
-                                                     priv->idx, (int) !onoff,
-                                                     -1);
+                        event_select_on (this->ctx->event_pool,
+                                         &priv->handle, (int) !onoff,
+                                         -1);
         }
         pthread_mutex_unlock (&priv->lock);
         return 0;
@@ -3740,7 +3741,6 @@ socket_init (rpc_transport_t *this)
 
         pthread_mutex_init (&priv->lock, NULL);
 
-        priv->idx = -1;
         priv->connected = -1;
         priv->nodelay = 1;
         priv->bio = 0;

@@ -16,6 +16,8 @@
 #include "config.h"
 #endif
 
+#include "list.h"
+
 #include <pthread.h>
 
 #ifdef GF_CYGWIN_HOST_OS
@@ -26,13 +28,13 @@ struct event_pool;
 struct event_ops;
 struct event_slot_poll;
 struct event_slot_epoll;
+
+#ifndef GF_CYGWIN_HOST_OS
 struct event_data {
 	int idx;
 	int gen;
 } __attribute__ ((__packed__, __may_alias__));
 
-
-#ifndef GF_CYGWIN_HOST_OS
 typedef int (*event_handler_t) (int fd, int idx, void *data,
 				int poll_in, int poll_out, int poll_err);
 #else
@@ -45,36 +47,23 @@ typedef int (*event_handler_t) (void *data, int status,
 #define EVENT_EPOLL_SLOTS 1024
 #define EVENT_MAX_THREADS  32
 
+#ifndef GF_CYGWIN_HOST_OS
 struct event_pool {
 	struct event_ops *ops;
 
-#ifndef GF_CYGWIN_HOST_OS
 	int fd;
 	int breaker[2];
-#else
-        uv_loop_t loop;
-        uv_pipe_t breaker;
-#endif
 
 	int count;
-#ifndef GF_CYGWIN_HOST_OS
 	struct event_slot_poll  *reg;
 	struct event_slot_epoll *ereg[EVENT_EPOLL_TABLES];
-#else
-        struct event_slot_poll_win32 *reg;
-#endif
 	int slots_used[EVENT_EPOLL_TABLES];
 
 	int used;
 	int changed;
 
-#ifndef GF_CYGWIN_HOST_OS
         pthread_mutex_t mutex;
 	pthread_cond_t cond;
-#else
-	uv_mutex_t mutex;
-	uv_cond_t cond;
-#endif
 
 	void *evcache;
 	int evcache_size;
@@ -82,16 +71,59 @@ struct event_pool {
         /* NOTE: Currently used only when event processing is done using
          * epoll. */
         int eventthreadcount; /* number of event threads to execute. */
-#ifndef GF_CYGWIN_HOST_OS
         pthread_t pollers[EVENT_MAX_THREADS]; /* poller thread_id store,
                                                      * and live status */
+        int destroy;
+        int activethreadcount;
+};
+
 #else
-        uv_thread_t pollers[EVENT_MAX_THREADS];
-#endif
+
+struct reg_node {
+        union {
+                struct list_head list;
+                struct {
+                        struct reg_node *next;
+                        struct reg_node *prev;
+                };
+        };
+        uint8_t reg[];
+};
+
+struct event_node {
+        union {
+                struct list_head list;
+                struct {
+                        struct event_node *next;
+                        struct event_node *prev;
+                };
+        };
+        uint8_t event[];
+};
+
+struct event_pool {
+	struct event_ops *ops;
+
+        uv_loop_t loop;
+        uv_async_t broker;
+
+        struct reg_node regs;
+
+        struct event_node events;
+
+	int changed;
+
+	pthread_mutex_t mutex;
+	pthread_cond_t cond;
+
+        /* NOTE: Currently used only when event processing is done using
+         * epoll. */
+        int eventthreadcount; /* number of event threads to execute. */
 
         int destroy;
         int activethreadcount;
 };
+#endif
 
 #ifndef GF_CYGWIN_HOST_OS
 struct event_ops {
@@ -133,35 +165,36 @@ int event_dispatch_destroy (struct event_pool *event_pool);
 struct event_ops {
         struct event_pool * (*new) (int count, int eventthreadcount);
 
-        int (*event_register) (struct event_pool *event_pool, uv_handle_t *fd,
-                               event_handler_t init,
-                               event_init_handler_t handler,
+        int (*event_register) (struct event_pool *event_pool,
+                               event_init_handler_t init,
+                               event_handler_t handler,
                                void *data, int poll_in, int poll_out);
 
-        int (*event_select_on) (struct event_pool *event_pool, uv_handle_t *fd, int idx,
+        int (*event_select_on) (struct event_pool *event_pool, void *handle,
                                 int poll_in, int poll_out);
 
-        int (*event_unregister) (struct event_pool *event_pool, uv_handle_t *fd, int idx);
+        int (*event_unregister) (struct event_pool *event_pool, void *handle);
 
-        int (*event_unregister_close) (struct event_pool *event_pool, uv_handle_t *fd,
-				       int idx);
+        int (*event_unregister_close) (struct event_pool *event_pool,
+				       void *handle);
 
         int (*event_dispatch) (struct event_pool *event_pool);
 
         int (*event_reconfigure_threads) (struct event_pool *event_pool,
                                           int newcount);
+
         int (*event_pool_destroy) (struct event_pool *event_pool);
 };
 
 struct event_pool *event_pool_new (int count, int eventthreadcount);
-int event_select_on (struct event_pool *event_pool, int idx,
+int event_select_on (struct event_pool *event_pool, void *handle,
 		     int poll_in, int poll_out);
 int event_register (struct event_pool *event_pool,
                     event_init_handler_t init,
 		    event_handler_t handler,
 		    void *data, int poll_in, int poll_out);
-int event_unregister (struct event_pool *event_pool, int idx);
-int event_unregister_close (struct event_pool *event_pool, int idx);
+int event_unregister (struct event_pool *event_pool, void *handle);
+int event_unregister_close (struct event_pool *event_pool, void *handle);
 int event_dispatch (struct event_pool *event_pool);
 int event_reconfigure_threads (struct event_pool *event_pool, int value);
 int event_pool_destroy (struct event_pool *event_pool);

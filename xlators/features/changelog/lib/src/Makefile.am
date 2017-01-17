@@ -5,8 +5,15 @@ libgfchangelog_la_CPPFLAGS = $(GF_CPPFLAGS) -D__USE_FILE_OFFSET64 -fpic \
 				-I../../../src/ -I$(top_srcdir)/libglusterfs/src \
 				-I$(top_srcdir)/xlators/features/changelog/src \
 				-I$(top_srcdir)/rpc/xdr/src -I$(top_srcdir)/rpc/rpc-lib/src \
-				-I$(top_srcdir)/rpc/rpc-transport/socket/src \
 				-DDATADIR=\"$(localstatedir)\"
+
+if GF_CYGWIN_HOST_OS
+libgfchangelog_la_CPPFLAGS += \
+			   -I$(top_builddir)/../cyguv/libuv/include \
+               -I$(top_srcdir)/rpc/rpc-transport/uv-socket/src
+else
+libgfchangelog_la_CPPFLAGS += -I$(top_srcdir)/rpc/rpc-transport/socket/src
+endif
 
 libgfchangelog_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la \
 			   $(top_builddir)/rpc/xdr/src/libgfxdr.la \

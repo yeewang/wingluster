@@ -19,7 +19,8 @@ AM_CPPFLAGS = $(GF_CPPFLAGS) -I$(top_srcdir)/libglusterfs/src \
         -D__USE_FILE_OFFSET64 \
 		-Wl,--export-all-symbols -Wl,--enable-auto-import
 
-AM_CFLAGS = -Wall $(GF_CFLAGS) -Wl,--export-all-symbols -Wl,--enable-auto-import
+AM_CFLAGS = -Wall $(GF_CFLAGS) -Wl,--export-all-symbols -Wl,--enable-auto-import \
+	-I$(top_builddir)/../cyguv/libuv/include
 
 libgfapi_la_LDFLAGS = -version-info $(GFAPI_LT_VERSION) \
 	$(GFAPI_EXTRA_LDFLAGS) $(ACL_LIBS) -no-undefined -Wl,--export-all-symbols -Wl,--enable-auto-import

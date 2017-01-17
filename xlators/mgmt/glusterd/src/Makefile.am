@@ -58,6 +58,10 @@ AM_CPPFLAGS = $(GF_CPPFLAGS) -I$(top_srcdir)/libglusterfs/src \
 	-DGANESHA_PREFIX=\"$(libexecdir)/ganesha\" \
 	-DSYNCDAEMON_COMPILE=$(SYNCDAEMON_COMPILE) $(XML_CPPFLAGS)
 
+if GF_CYGWIN_HOST_OS
+AM_CPPFLAGS += \
+		  -I$(top_builddir)/../cyguv/libuv/include
+endif
 
 AM_CFLAGS = -Wall $(GF_CFLAGS) $(URCU_CFLAGS) $(URCU_CDS_CFLAGS)
 
