@@ -34,35 +34,43 @@ struct broker_data {
 
 struct reg_data {
         uv_loop_t *loop;
+        void *translator;
         uv_handle_t *handle;
         int events;
-        void *data;
         event_init_handler_t init;
         event_handler_t handler;
 };
 
 static int
 event_register_poll (struct event_pool *event_pool,
+                     void *translator,
+                     void *handle,
                      event_init_handler_t init,
 		     event_handler_t handler,
-                     void *data, int poll_in, int poll_out);
+                     int poll_in, int poll_out);
 
 static int
 event_unregister_poll (struct event_pool *event_pool,
                        void *handle);
 
+static int
+event_unregister_close_poll (struct event_pool *event_pool, void *handle);
+
+static void *
+event_dispatch_win32_worker (void *data);
+
 
 static struct reg_data *
 __event_getindex (struct event_pool *event_pool, void *handle)
 {
-        struct reg_node *slot = NULL;
+        struct reg_node *reg_node = NULL;
         struct reg_data *retval = NULL;
         struct reg_data *item = NULL;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        list_for_each_entry(slot, &event_pool->regs.list, list) {
-                item = (struct reg_data *)&slot->reg;
+        list_for_each_entry(reg_node, &event_pool->regs.list, list) {
+                item = (struct reg_data *)&reg_node->reg;
                 if (item->handle == handle) {
                         retval = item;
                         break;
@@ -76,6 +84,7 @@ static struct event_pool *
 event_pool_new_poll (int count, int eventthreadcount)
 {
         struct event_pool *event_pool = NULL;
+        pthread_t          t_id;
         int                ret = -1;
 
         /* load libuv */
@@ -93,6 +102,21 @@ event_pool_new_poll (int count, int eventthreadcount)
         INIT_LIST_HEAD(&event_pool->events);
 
         pthread_mutex_init (&event_pool->mutex, NULL);
+        pthread_cond_init (&event_pool->cond, NULL);
+
+        ret = pthread_create (&t_id, NULL,
+                              event_dispatch_win32_worker,
+                              event_pool);
+        if (ret) {
+                gf_msg ("epoll", GF_LOG_WARNING,
+                        0,
+                        LG_MSG_START_EPOLL_THREAD_FAILED,
+                        "Failed to start poll thread");
+                GF_FREE (event_pool);
+                return NULL;
+        } else {
+                event_pool->poller = t_id;
+        }
 
         if (eventthreadcount > 1) {
                 gf_msg ("poll", GF_LOG_INFO, 0,
@@ -106,27 +130,27 @@ event_pool_new_poll (int count, int eventthreadcount)
 
 static int
 event_register_poll (struct event_pool *event_pool,
+                     void *translator,
+                     void *handle,
                      event_init_handler_t init,
 		     event_handler_t handler,
-                     void *data, int poll_in, int poll_out)
+                     int poll_in, int poll_out)
 {
         uv_loop_t *loop = NULL;
-        uv_handle_t *handle = NULL;
         struct reg_node *new_reg = NULL;
-        struct reg_data *item = NULL;
+        struct reg_data *reg_data = NULL;
         struct event_node *new_event = NULL;
         struct broker_data *bd = NULL;
         int need_clean = 0;
         int ret = -1;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
-        GF_VALIDATE_OR_GOTO ("event", data, out);
-
-        handle = data;
+        GF_VALIDATE_OR_GOTO ("event", translator, out);
+        GF_VALIDATE_OR_GOTO ("event", handle, out);
 
         gf_msg ("poll", GF_LOG_DEBUG, 0,
                 LG_MSG_POLL_IGNORE_MULTIPLE_THREADS, "Registering a new "
-                "handle %p to the pool", data);
+                "handle %p to the pool", handle);
 
         pthread_mutex_lock (&event_pool->mutex);
         {
@@ -136,10 +160,10 @@ event_register_poll (struct event_pool *event_pool,
         pthread_mutex_unlock (&event_pool->mutex);
 
         if (need_clean) {
+                event_unregister_close_poll(event_pool, handle);
                 gf_msg ("poll", GF_LOG_DEBUG, 0,
-                        LG_MSG_POLL_IGNORE_MULTIPLE_THREADS, "Remove the old "
-                        "handle %p to the pool", data);
-                event_unregister_poll(event_pool, handle);
+                        LG_MSG_POLL_IGNORE_MULTIPLE_THREADS, "Removed the old "
+                        "handle %p to the pool", handle);
         }
 
         pthread_mutex_lock (&event_pool->mutex);
@@ -156,20 +180,20 @@ event_register_poll (struct event_pool *event_pool,
                         goto unlock;
                 }
 
-                item = (struct reg_data *)new_reg->reg;
-                item->loop = loop;
-                item->handle = handle;
-                item->events = UV_DISCONNECT;
-                item->init = init;
-                item->handler = handler;
-                item->data = data;
+                reg_data = (struct reg_data *)new_reg->reg;
+                reg_data->loop = loop;
+                reg_data->translator = translator;
+                reg_data->handle = handle;
+                reg_data->events = UV_DISCONNECT;
+                reg_data->init = init;
+                reg_data->handler = handler;
 
                 switch (poll_in) {
                 case 1:
-                        item->events |= UV_READABLE;
+                        reg_data->events |= UV_READABLE;
                         break;
                 case 0:
-                        item->events &= ~UV_READABLE;
+                        reg_data->events &= ~UV_READABLE;
                         break;
                 case -1:
                         /* do nothing */
@@ -183,10 +207,10 @@ event_register_poll (struct event_pool *event_pool,
 
                 switch (poll_out) {
                 case 1:
-                        item->events |= UV_WRITABLE;
+                        reg_data->events |= UV_WRITABLE;
                         break;
                 case 0:
-                        item->events &= ~UV_WRITABLE;
+                        reg_data->events &= ~UV_WRITABLE;
                         break;
                 case -1:
                         /* do nothing */
@@ -233,30 +257,24 @@ static int
 event_unregister_poll (struct event_pool *event_pool, void *handle)
 {
         int ret = 0;
-        struct reg_node *reg = NULL;
-        static struct reg_data *slot = NULL;
+        struct reg_node *reg_node = NULL;
+        struct reg_node *n = NULL;
+        struct reg_data *reg_data = NULL;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
         pthread_mutex_lock (&event_pool->mutex);
         {
-                slot = __event_getindex (event_pool, handle);
+                list_for_each_entry_safe (reg_node, n, &event_pool->regs.list, list) {
+                        reg_data = (struct reg_data *)&reg_node->reg;
+                        if (reg_data->handle == handle) {
+                                list_del(&reg_node->list);
+                                GF_FREE(reg_node);
 
-                if (slot == NULL) {
-                        gf_msg ("poll", GF_LOG_ERROR, 0, LG_MSG_INDEX_NOT_FOUND,
-                                "handle not found for handle=%p",
-                                handle);
-                        errno = ENOENT;
-                        ret = -1;
-                        goto unlock;
+                                event_pool->changed = 1;
+                                break;
+                        }
                 }
-
-                reg = CONTAINER_OF(slot, struct reg_node, reg);
-
-                list_del(&reg->list);
-                GF_FREE(reg);
-
-                event_pool->changed = 1;
         }
 unlock:
         pthread_mutex_unlock (&event_pool->mutex);
@@ -265,9 +283,18 @@ out:
         return ret;
 }
 
-static void __close_handle(uv_handle_t* handle)
+static void
+__close_handle(uv_handle_t* handle)
 {
+        struct event_pool *event_pool = NULL;
 
+        event_pool = CONTAINER_OF(handle->loop, struct event_pool, loop);
+
+        pthread_mutex_lock (&event_pool->mutex);
+        {
+                pthread_cond_broadcast (&event_pool->cond);
+        }
+        pthread_mutex_unlock (&event_pool->mutex);
 }
 
 static int
@@ -275,9 +302,15 @@ event_unregister_close_poll (struct event_pool *event_pool, void *handle)
 {
         int ret = -1;
 
-	ret = event_unregister_poll (event_pool, handle);
+        uv_close (handle, __close_handle);
 
-	uv_close (handle, __close_handle);
+        pthread_mutex_lock (&event_pool->mutex);
+        {
+                pthread_cond_wait (&event_pool->cond, &event_pool->mutex);
+        }
+        pthread_mutex_unlock (&event_pool->mutex);
+
+	ret = event_unregister_poll (event_pool, handle);
 
         return ret;
 }
@@ -344,6 +377,23 @@ out:
         return ret;
 }
 
+static struct reg_data *
+__event_registered(struct event_pool *event_pool, uv_handle_t *handle)
+{
+        struct reg_node *reg_node = NULL;
+        struct reg_data *reg_data = NULL;
+
+        list_for_each_entry(reg_node, &event_pool->regs.list, list) {
+                reg_data = (struct reg_data *)reg_node->reg;
+                if (reg_data->handle == handle) {
+                        return reg_data;
+                        break;
+                }
+        }
+
+        return NULL;
+}
+
 static void
 __event_async_cb(uv_async_t* handle)
 {
@@ -351,18 +401,23 @@ __event_async_cb(uv_async_t* handle)
         struct event_pool *event_pool = NULL;
         struct event_node *event_node = NULL, *n;
         struct broker_data *ed = NULL;
-        struct reg_data *slot = NULL;
+        struct reg_data *reg_data = NULL;
         int toread = 0, towrite = 0;
 
         event_pool = CONTAINER_OF(handle, struct event_pool, broker);
 
         list_for_each_entry_safe(event_node, n, &event_pool->events.list, list) {
                 ed = (struct broker_data *)&event_node->event;
-                slot = CONTAINER_OF(ed->handle, struct reg_data, handle);
+                reg_data = __event_registered(event_pool, ed->handle);
+                if (reg_data == NULL)
+                        gf_msg ("epoll", GF_LOG_DEBUG, 0,
+                                LG_MSG_START_EPOLL_THREAD_FAILED,
+                                "Not found the handle in reg table: %p", ed->handle);
 
                 if (ed->type & INIT) {
-                        if (slot->init)
-                                ret = slot->init(slot->loop, slot->handle);
+                        if (reg_data->init)
+                                ret = reg_data->init(reg_data->loop,
+                                                     reg_data->translator);
                         else {
                                 gf_msg ("epoll", GF_LOG_DEBUG, 0,
                                         LG_MSG_START_EPOLL_THREAD_FAILED,
@@ -377,8 +432,8 @@ __event_async_cb(uv_async_t* handle)
                 }
 
                 if (toread || towrite)
-                        if (slot->handler)
-                                ret = slot->handler(slot->handle, 0, toread, towrite, 0);
+                        if (reg_data->handler)
+                                ret = reg_data->handler(reg_data->handle, 0, toread, towrite, 0);
                         else
                                 gf_msg ("epoll", GF_LOG_DEBUG, 0,
                                         LG_MSG_START_EPOLL_THREAD_FAILED,
@@ -390,10 +445,13 @@ __event_async_cb(uv_async_t* handle)
 }
 
 
-static void
-event_dispatch_win32_worker (struct event_pool  *event_pool)
+static void *
+event_dispatch_win32_worker (void *data)
 {
+        struct event_pool  *event_pool = NULL;
         int                 ret = -1;
+
+        event_pool = data;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
@@ -423,7 +481,7 @@ event_dispatch_win32_worker (struct event_pool  *event_pool)
         }
 
 out:
-        return;
+        return NULL;
 }
 
 
@@ -436,11 +494,7 @@ event_dispatch_poll (struct event_pool *event_pool)
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        event_pool->activethreadcount++;
-
-        event_dispatch_win32_worker(event_pool);
-
-        event_pool->activethreadcount--;
+        pthread_join (event_pool->poller, NULL);
 
 out:
         return -1;

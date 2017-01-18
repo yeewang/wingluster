@@ -38,7 +38,7 @@ struct event_data {
 typedef int (*event_handler_t) (int fd, int idx, void *data,
 				int poll_in, int poll_out, int poll_err);
 #else
-typedef int (*event_init_handler_t) (uv_loop_t *loop, void *data);
+typedef int (*event_init_handler_t) (uv_loop_t *loop, void *translator);
 typedef int (*event_handler_t) (void *data, int status,
 				int poll_in, int poll_out, int poll_err);
 #endif
@@ -113,6 +113,8 @@ struct event_pool {
 
 	int changed;
 
+        pthread_t poller;
+
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
 
@@ -166,9 +168,11 @@ struct event_ops {
         struct event_pool * (*new) (int count, int eventthreadcount);
 
         int (*event_register) (struct event_pool *event_pool,
+                               void *ctx,
+                               void *handle,
                                event_init_handler_t init,
                                event_handler_t handler,
-                               void *data, int poll_in, int poll_out);
+                               int poll_in, int poll_out);
 
         int (*event_select_on) (struct event_pool *event_pool, void *handle,
                                 int poll_in, int poll_out);
@@ -190,9 +194,11 @@ struct event_pool *event_pool_new (int count, int eventthreadcount);
 int event_select_on (struct event_pool *event_pool, void *handle,
 		     int poll_in, int poll_out);
 int event_register (struct event_pool *event_pool,
+                    void *ctx,
+                    void *handle,
                     event_init_handler_t init,
 		    event_handler_t handler,
-		    void *data, int poll_in, int poll_out);
+		    int poll_in, int poll_out);
 int event_unregister (struct event_pool *event_pool, void *handle);
 int event_unregister_close (struct event_pool *event_pool, void *handle);
 int event_dispatch (struct event_pool *event_pool);

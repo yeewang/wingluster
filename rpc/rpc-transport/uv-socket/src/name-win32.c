@@ -635,82 +635,13 @@ err:
 }
 
 int32_t
-fill_inet6_inet_identifiers (rpc_transport_t *this, struct sockaddr_storage *addr,
-                             int32_t addr_len, char *identifier)
-{
-        union gf_sock_union sock_union;
-
-        char    service[NI_MAXSERV] = {0,};
-        char    host[NI_MAXHOST]    = {0,};
-        int32_t ret                 = 0;
-        int32_t tmpaddr_len         = 0;
-        int32_t one_to_four         = 0;
-        int32_t four_to_eight       = 0;
-        int32_t twelve_to_sixteen   = 0;
-        int16_t eight_to_ten        = 0;
-        int16_t ten_to_twelve       = 0;
-
-        memset (&sock_union, 0, sizeof (sock_union));
-        sock_union.storage = *addr;
-        tmpaddr_len = addr_len;
-
-        if (sock_union.sa.sa_family == AF_INET6) {
-                one_to_four = sock_union.sin6.sin6_addr.s6_addr32[0];
-                four_to_eight = sock_union.sin6.sin6_addr.s6_addr32[1];
-#ifdef GF_SOLARIS_HOST_OS
-                eight_to_ten = S6_ADDR16(sock_union.sin6.sin6_addr)[4];
-#else
-                eight_to_ten = sock_union.sin6.sin6_addr.s6_addr16[4];
-#endif
-
-#ifdef GF_SOLARIS_HOST_OS
-                ten_to_twelve = S6_ADDR16(sock_union.sin6.sin6_addr)[5];
-#else
-                ten_to_twelve = sock_union.sin6.sin6_addr.s6_addr16[5];
-#endif
-
-                twelve_to_sixteen = sock_union.sin6.sin6_addr.s6_addr32[3];
-
-                /* ipv4 mapped ipv6 address has
-                   bits 0-80: 0
-                   bits 80-96: 0xffff
-                   bits 96-128: ipv4 address
-                */
-
-                if (one_to_four == 0 &&
-                    four_to_eight == 0 &&
-                    eight_to_ten == 0 &&
-                    ten_to_twelve == -1) {
-                        struct sockaddr_in_cyguv *in_ptr = &sock_union.sin;
-                        memset (&sock_union, 0, sizeof (sock_union));
-
-                        in_ptr->sin_family = AF_INET;
-                        in_ptr->sin_port = ((struct sockaddr_in6 *)addr)->sin6_port;
-                        in_ptr->sin_addr.s_addr_cyguv = twelve_to_sixteen;
-                        tmpaddr_len = sizeof (*in_ptr);
-                }
-        }
-
-        ret = getnameinfo (&sock_union.sa,
-                           tmpaddr_len,
-                           host, sizeof (host),
-                           service, sizeof (service),
-                           NI_NUMERICHOST | NI_NUMERICSERV);
-        if (ret != 0) {
-                gf_log (this->name, GF_LOG_ERROR,
-                        "getnameinfo failed (%s)", gai_strerror (ret));
-        }
-
-        sprintf (identifier, "%s:%s", host, service);
-
-        return ret;
-}
-
-int32_t
 get_transport_identifiers (rpc_transport_t *this)
 {
+        socket_private_t *priv = NULL;
         int32_t ret = 0;
         char is_inet_sdp = 0;
+
+        priv = this->private;
 
         switch (((struct sockaddr *) &this->myinfo.sockaddr)->sa_family)
         {
@@ -721,24 +652,30 @@ get_transport_identifiers (rpc_transport_t *this)
         case AF_INET:
         case AF_INET6:
         {
-                ret = fill_inet6_inet_identifiers (this,
-                                                   &this->myinfo.sockaddr,
-                                                   this->myinfo.sockaddr_len,
-                                                   this->myinfo.identifier);
-                if (ret == -1) {
+                ret = uv_getnameinfo(priv->handle.sock.loop, &priv->read_req.nameinfo_req,
+                                     NULL,
+                        (struct sockaddr*)&this->peerinfo.sockaddr, 0);
+                if (ret != 0) {
                         gf_log (this->name, GF_LOG_ERROR,
-                                "cannot fill inet/inet6 identifier for server");
-                        goto err;
+                                "getnameinfo failed (%s)", uv_strerror (ret));
+                }
+                else {
+                        sprintf (this->peerinfo.identifier, "%s:%s",
+                                priv->read_req.nameinfo_req.host,
+                                priv->read_req.nameinfo_req.service);
                 }
 
-                ret = fill_inet6_inet_identifiers (this,
-                                                   &this->peerinfo.sockaddr,
-                                                   this->peerinfo.sockaddr_len,
-                                                   this->peerinfo.identifier);
-                if (ret == -1) {
+                ret = uv_getnameinfo(priv->handle.sock.loop, &priv->read_req.nameinfo_req,
+                        NULL,
+                        (struct sockaddr*)&this->myinfo.sockaddr, 0);
+                if (ret != 0) {
                         gf_log (this->name, GF_LOG_ERROR,
-                                "cannot fill inet/inet6 identifier for client");
-                        goto err;
+                                "getnameinfo failed (%s)", uv_strerror (ret));
+                }
+                else {
+                        sprintf (this->myinfo.identifier, "%s:%s",
+                                priv->read_req.nameinfo_req.host,
+                                priv->read_req.nameinfo_req.service);
                 }
 
                 if (is_inet_sdp) {

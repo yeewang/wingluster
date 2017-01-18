@@ -242,6 +242,8 @@ enum CONN_STATE {
 #endif /* GF_CYGWIN_HOST_OS */
 
 typedef struct {
+        void                  *translator;
+
         uv_loop_t              loop;
 
         union {
@@ -256,6 +258,7 @@ typedef struct {
         ssize_t                result;
 
         union {
+                uv_getnameinfo_t nameinfo_req;
                 uv_getaddrinfo_t addrinfo_req;
                 uv_connect_t connect_req;
                 uv_shutdown_t shutdown_req;

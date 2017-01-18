@@ -492,7 +492,7 @@ static void on_socket_written(uv_write_t* req, int status)
         socket_private_t *priv;
 
         priv = CONTAINER_OF(req, socket_private_t, write_req);
-        this = CONTAINER_OF(priv, rpc_transport_t, private);
+        this = priv->translator;
 
         if (status < 0) {
                 gf_log(this->name, GF_LOG_ERROR,
@@ -2214,8 +2214,6 @@ socket_connect_finish (rpc_transport_t *this, int status)
                         goto unlock;
                 }
 
-                get_transport_identifiers (this);
-
                 if (status != 0) {
                         ret = -1;
 
@@ -2320,7 +2318,7 @@ on_connect_cb (uv_connect_t* req, int status)
         }
 
         priv = CONTAINER_OF(req, socket_private_t, write_req);
-        this = CONTAINER_OF(priv, rpc_transport_t, private);
+        this = priv->translator;
 
         if (priv->use_ssl) {
                 cname = ssl_setup_connection(this,priv->connected);
@@ -2366,7 +2364,7 @@ on_read_cb(uv_stream_t* sock, ssize_t nread, const uv_buf_t* buf)
         int ret = -1;
 
         priv = CONTAINER_OF(sock, socket_private_t, sock);
-        this = CONTAINER_OF(priv, rpc_transport_t, private);
+        this = priv->translator;
 
         //priv->buf = buf;
 
@@ -2391,7 +2389,7 @@ on_write_cb(uv_write_t* req)
         int ret = -1;
 
         priv = CONTAINER_OF(req, socket_private_t, write_req);
-        this = CONTAINER_OF(priv, rpc_transport_t, private);
+        this = priv->translator;
 
         ret = socket_event_poll_out(this);
         if (ret >= 0) {
@@ -2558,7 +2556,7 @@ socket_spawn (rpc_transport_t *this)
 #endif
 
 static int
-socket_connect_init(uv_loop_t *loop, void *data);
+socket_connect_init(uv_loop_t *loop, void *translator);
 
 static int
 socket_server_event_handler (rpc_transport_t * this)
@@ -2722,9 +2720,10 @@ socket_server_event_handler (rpc_transport_t * this)
 #endif /* NEVER */
                         }  else {
                                 ret = event_register (ctx->event_pool,
+                                                      this,
+                                                      &priv->handle,
                                                       socket_connect_init,
                                                       socket_event_handler,
-                                                      &new_priv->handle,
                                                       1, 0);
                                 if (ret != 0) {
                                         ret = -1;
@@ -2905,7 +2904,7 @@ on_buf_alloc(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf)
         struct iobuf *iobuf;
 
         priv = CONTAINER_OF(handle, socket_private_t, handle);
-        this = CONTAINER_OF(priv, rpc_transport_t, private);
+        this = priv->translator;
 
         iobuf = iobuf_get2 (this->ctx->iobuf_pool,
                             suggested_size + sizeof(struct buf_ioq));
@@ -2925,6 +2924,22 @@ free_buf_ioq(struct buf_ioq *buf_ioq)
         iobuf_unref(iobuf);
 }
 
+void __name_getnameinfo_cb(uv_getnameinfo_t* req, int status,
+                           const char* hostname, const char* service)
+{
+        rpc_transport_t *this = NULL;
+        socket_private_t *priv = NULL;
+
+        priv = CONTAINER_OF(req, socket_private_t, read_req);
+
+        if (status != 0)
+                return;
+
+        this = priv->translator;
+        printf ("%s:%s", hostname,
+                 service);
+}
+
 static void
 socket_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 {
@@ -2934,7 +2949,7 @@ socket_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
         int ret = -1;
 
         priv = CONTAINER_OF(stream, socket_private_t, handle);
-        this = CONTAINER_OF(priv, rpc_transport_t, private);
+        this = priv->translator;
 
         if (nread == 0) {
                 /* Mostly due to 'umount' in client */
@@ -2964,11 +2979,17 @@ socket_connect_cb(uv_connect_t *req, int status)
         int ret = -1;
 
         priv = CONTAINER_OF(req, socket_private_t, read_req);
-        this = CONTAINER_OF(priv, rpc_transport_t, private);
+        this = priv->translator;
 
         if (status == UV_ECANCELED) {
                 socket_event_handler(this, status, 1, 0, 0);
                 return;  /* Handle has been closed. */
+        }
+        else if (status != 0) {
+                gf_log (this->name, GF_LOG_DEBUG,
+                        "socket (%s) connect callback with error: %s",
+                        this->peerinfo.identifier,
+                        uv_strerror(status));
         }
 
         ret = uv_read_start(&priv->handle.stream, on_buf_alloc, socket_read_cb);
@@ -2979,7 +3000,7 @@ socket_connect_cb(uv_connect_t *req, int status)
 }
 
 static int
-socket_connect_init(uv_loop_t *loop, void * data)
+socket_connect_init(uv_loop_t *loop, void *translator)
 {
         rpc_transport_t * this = NULL;
         socket_private_t *priv = NULL;
@@ -2988,16 +3009,10 @@ socket_connect_init(uv_loop_t *loop, void * data)
         char *cname = NULL;
         int ret = -1;
 
-        priv = CONTAINER_OF(data, socket_private_t, handle);
-        this = CONTAINER_OF(priv, rpc_transport_t, private);
+        this = translator;
+        priv = this->private;
         sock = &priv->handle.sock;
-        req = &priv->read_req.connect_req;;
-
-        pthread_mutex_lock (&priv->lock);
-        {
-                //priv->idx = idx;
-        }
-        pthread_mutex_unlock (&priv->lock);
+        req = &priv->read_req.connect_req;
 
         ret = uv_tcp_init(loop, sock);
         if (ret != 0) {
@@ -3006,6 +3021,8 @@ socket_connect_init(uv_loop_t *loop, void * data)
                         uv_strerror (ret));
                 return ret;
         }
+
+        get_transport_identifiers(this);
 
         ret = uv_tcp_connect(req, sock, SA (&this->peerinfo.sockaddr),
                        socket_connect_cb);
@@ -3163,9 +3180,11 @@ socket_connect (rpc_transport_t *this, int port)
                                 priv->ot_state, priv->ot_gen, &priv->handle.sock);
 
                         ret = event_register (ctx->event_pool,
+                                              this,
+                                              &priv->handle,
                                               socket_connect_init,
                                               socket_event_handler,
-                                              &priv->handle, 1, 1);
+                                              1, 1);
                         if (ret != 0) {
                                 gf_log ("", GF_LOG_WARNING,
                                         "failed to register the event");
@@ -3218,24 +3237,27 @@ socket_listen_cb(uv_stream_t* server, int status)
         int ret = -1;
 
         priv = CONTAINER_OF(server, socket_private_t, handle);
-        this = CONTAINER_OF(priv, rpc_transport_t, private);
+        this = priv->translator;
 
         if (status != 0)
                 return;
+
+
+        //init myinfo peerinfo
 
         socket_server_event_handler(this);
 }
 
 static int
-socket_listen_init(uv_loop_t *loop, void *data)
+socket_listen_init(uv_loop_t *loop, void *translator)
 {
         rpc_transport_t * this;
         socket_private_t * priv;
         uv_tcp_t *sock;
         int ret = -1;
 
-        priv = CONTAINER_OF(data, socket_private_t, handle);
-        this = CONTAINER_OF(priv, rpc_transport_t, private);
+        this = translator;
+        priv = this->private;
         sock = &priv->handle.sock;
 
         ret = uv_tcp_init(loop, sock);
@@ -3308,9 +3330,11 @@ socket_listen (rpc_transport_t *this)
                 rpc_transport_ref (this);
 
                 ret = event_register (ctx->event_pool,
+                                      this,
+                                      &priv->handle,
                                       socket_listen_init,
                                       socket_event_handler,
-                                      &priv->handle, 1, 0);
+                                      1, 0);
 
                 if (ret != 0) {
                         gf_log (this->name, GF_LOG_WARNING,
@@ -3741,6 +3765,7 @@ socket_init (rpc_transport_t *this)
 
         pthread_mutex_init (&priv->lock, NULL);
 
+        priv->translator = this;
         priv->connected = -1;
         priv->nodelay = 1;
         priv->bio = 0;
