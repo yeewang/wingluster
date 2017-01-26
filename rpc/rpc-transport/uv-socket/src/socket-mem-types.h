@@ -18,6 +18,9 @@ typedef enum gf_sock_mem_types_ {
         gf_sock_mt_lock_array,
         gf_sock_mt_tid_wrap,
         gf_sock_mt_handle,
+        gf_sock_mt_req,
+        gf_sock_mt_read_ioq,
+        gf_sock_mt_write_ioq,
         gf_sock_mt_end
 } gf_sock_mem_types_t;
 

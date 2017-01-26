@@ -125,17 +125,44 @@ struct ioq {
         struct iobref     *iobref;
 };
 
-struct buf_ioq {
+struct read_ioq {
         union {
                 struct list_head list;
                 struct {
-                        struct buf_ioq  *next;
-                        struct buf_ioq  *prev;
+                        struct read_ioq  *next;
+                        struct read_ioq  *prev;
                 };
         };
 
         struct iovec       vector;
         size_t             read;
+};
+
+struct write_ioq {
+        union {
+                struct list_head list;
+                struct {
+                        struct write_ioq  *next;
+                        struct write_ioq  *prev;
+                };
+        };
+
+	struct ioq	  *ioq;
+        uv_buf_t       	   bufs[MAX_IOVEC];
+        int                count;
+};
+
+struct req_buf {
+	void 		  *priv;
+	void 		  *data;
+        union {
+                uv_getnameinfo_t nameinfo_req;
+                uv_getaddrinfo_t addrinfo_req;
+                uv_connect_t connect_req;
+                uv_shutdown_t shutdown_req;
+                uv_req_t req;
+		uv_write_t write_req;
+        };
 };
 
 typedef struct {
@@ -233,18 +260,16 @@ typedef enum {
 } ot_state_t;
 
 #ifdef GF_CYGWIN_HOST_OS
-enum CONN_STATE {
-        c_busy,  /* Busy; waiting for incoming data or for a write to complete. */
-        c_done,  /* Done; read incoming data or write finished. */
-        c_stop,  /* Stopped. */
-        c_dead
-};
+typedef enum {
+        C_BUSY,  /* Busy; waiting for incoming data or for a write to complete. */
+        C_DONE,  /* Done; read incoming data or write finished. */
+        C_STOP,  /* Stopped. */
+        C_DEAD
+} conn_state_t;
 #endif /* GF_CYGWIN_HOST_OS */
 
 typedef struct {
         void                  *translator;
-
-        uv_loop_t              loop;
 
         union {
                 uv_handle_t handle;
@@ -253,29 +278,25 @@ typedef struct {
                 uv_udp_t udp;
         }                      handle;
 
-        int                    rdstate;
-        int                    wrstate;
+        uv_timer_t             timer;
+
+        conn_state_t           rdstate;
+        conn_state_t           wrstate;
         ssize_t                result;
-
-        union {
-                uv_getnameinfo_t nameinfo_req;
-                uv_getaddrinfo_t addrinfo_req;
-                uv_connect_t connect_req;
-                uv_shutdown_t shutdown_req;
-                uv_req_t req;
-        }                      read_req;
-
-        uv_timer_t             timer_handle;
-        uv_write_t             write_req;
-
-        uv_buf_t               wr_buf[IOV_MAX];
-        uint64_t               wr_size;
 
         union {
                 struct list_head        read_ioq;
                 struct {
-                        struct buf_ioq  *read_ioq_next;
-                        struct buf_ioq  *read_ioq_prev;
+                        struct read_ioq *read_ioq_next;
+                        struct read_ioq *read_ioq_prev;
+                };
+        };
+
+	union {
+                struct list_head        write_ioq;
+                struct {
+                        struct write_ioq *write_ioq_next;
+                        struct write_ioq *write_ioq_prev;
                 };
         };
 
@@ -315,12 +336,10 @@ typedef struct {
 	char                  *ssl_private_key;
 	char                  *ssl_ca_list;
 	pthread_t              thread;
-#ifdef GF_CYGWIN_HOST_OS
-        uv_loop_t              local_loop;
-        uv_async_t             notify;
-#else
-	int                    pipe[2];
-#endif /* GF_CYGWIN_HOST_OS */
+
+        uv_async_t             notify_read;
+	uv_async_t             notify_write;
+
 	gf_boolean_t           own_thread;
         ot_state_t             ot_state;
         uint32_t               ot_gen;
