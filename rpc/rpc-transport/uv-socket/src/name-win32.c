@@ -8,47 +8,47 @@
   cases as published by the Free Software Foundation.
 */
 
-#include <sys/types.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/types.h>
 
 #ifndef AF_INET_SDP
 #define AF_INET_SDP 27
 #endif
 
-#include "socket.h"
-#include "rpc-transport.h"
 #include "common-utils.h"
-
+#include "rpc-transport.h"
+#include "socket.h"
 
 #ifndef AI_ADDRCONFIG
 #define AI_ADDRCONFIG 0
 #endif /* AI_ADDRCONFIG */
 
-
 static void
-_assign_port (struct sockaddr *sockaddr, uint16_t port)
+_assign_port (struct sockaddr* sockaddr, uint16_t port)
 {
         switch (sockaddr->sa_family) {
-        case AF_INET6:
-                ((struct sockaddr_in6 *)sockaddr)->sin6_port = htons (port);
-                break;
+                case AF_INET6:
+                        ((struct sockaddr_in6*)sockaddr)->sin6_port =
+                          htons (port);
+                        break;
 
-        case AF_INET_SDP:
-        case AF_INET:
-                ((struct sockaddr_in *)sockaddr)->sin_port = htons (port);
-                break;
+                case AF_INET_SDP:
+                case AF_INET:
+                        ((struct sockaddr_in*)sockaddr)->sin_port =
+                          htons (port);
+                        break;
         }
 }
 
 static int32_t
-af_inet_bind_to_port_lt_ceiling (int fd, struct sockaddr *sockaddr,
+af_inet_bind_to_port_lt_ceiling (int fd, struct sockaddr* sockaddr,
                                  socklen_t sockaddr_len, uint32_t ceiling)
 {
-        int32_t        ret        = -1;
-        uint16_t      port        = ceiling - 1;
-        gf_boolean_t  ports[GF_PORT_MAX];
-        int           i           = 0;
+        int32_t ret = -1;
+        uint16_t port = ceiling - 1;
+        gf_boolean_t ports[GF_PORT_MAX];
+        int i = 0;
 
 loop:
         ret = gf_process_reserved_ports (ports, ceiling);
@@ -94,18 +94,16 @@ loop:
 }
 
 static int32_t
-af_unix_client_bind (rpc_transport_t *this,
-                     struct sockaddr *sockaddr,
-                     socklen_t sockaddr_len,
-                     int sock)
+af_unix_client_bind (rpc_transport_t* this, struct sockaddr* sockaddr,
+                     socklen_t sockaddr_len, int sock)
 {
-        data_t *path_data = NULL;
-        struct sockaddr_un *addr = NULL;
+        data_t* path_data = NULL;
+        struct sockaddr_un* addr = NULL;
         int32_t ret = 0;
 
         path_data = dict_get (this->options, "transport.socket.bind-path");
         if (path_data) {
-                char *path = data_to_str (path_data);
+                char* path = data_to_str (path_data);
                 if (!path || strlen (path) > UNIX_PATH_MAX) {
                         gf_log (this->name, GF_LOG_TRACE,
                                 "bind-path not specified for unix socket, "
@@ -113,9 +111,9 @@ af_unix_client_bind (rpc_transport_t *this,
                         goto err;
                 }
 
-                addr = (struct sockaddr_un *) sockaddr;
+                addr = (struct sockaddr_un*)sockaddr;
                 strcpy (addr->sun_path, path);
-                ret = bind (sock, (struct sockaddr *)addr, sockaddr_len);
+                ret = bind (sock, (struct sockaddr*)addr, sockaddr_len);
                 if (ret == -1) {
                         gf_log (this->name, GF_LOG_ERROR,
                                 "cannot bind to unix-domain socket %d (%s)",
@@ -133,10 +131,10 @@ err:
 }
 
 int32_t
-client_fill_address_family (rpc_transport_t *this, sa_family_t *sa_family)
+client_fill_address_family (rpc_transport_t* this, sa_family_t* sa_family)
 {
-        data_t  *address_family_data = NULL;
-        int32_t  ret                 = -1;
+        data_t* address_family_data = NULL;
+        int32_t ret = -1;
 
         if (sa_family == NULL) {
                 gf_log_callingfn ("", GF_LOG_WARNING,
@@ -144,19 +142,20 @@ client_fill_address_family (rpc_transport_t *this, sa_family_t *sa_family)
                 goto out;
         }
 
-        address_family_data = dict_get (this->options,
-                                        "transport.address-family");
+        address_family_data =
+          dict_get (this->options, "transport.address-family");
         if (!address_family_data) {
                 data_t *remote_host_data = NULL, *connect_path_data = NULL;
                 remote_host_data = dict_get (this->options, "remote-host");
-                connect_path_data = dict_get (this->options,
-                                              "transport.socket.connect-path");
+                connect_path_data =
+                  dict_get (this->options, "transport.socket.connect-path");
 
                 if (!(remote_host_data || connect_path_data) ||
                     (remote_host_data && connect_path_data)) {
                         gf_log (this->name, GF_LOG_ERROR,
                                 "transport.address-family not specified. "
-                                "Could not guess default value from (remote-host:%s or "
+                                "Could not guess default value from "
+                                "(remote-host:%s or "
                                 "transport.unix.connect-path:%s) options",
                                 data_to_str (remote_host_data),
                                 data_to_str (connect_path_data));
@@ -167,17 +166,20 @@ client_fill_address_family (rpc_transport_t *this, sa_family_t *sa_family)
                 if (remote_host_data) {
                         gf_log (this->name, GF_LOG_DEBUG,
                                 "address-family not specified, guessing it "
-                                "to be inet from (remote-host: %s)", data_to_str (remote_host_data));
+                                "to be inet from (remote-host: %s)",
+                                data_to_str (remote_host_data));
                         *sa_family = AF_INET;
                 } else {
-                        gf_log (this->name, GF_LOG_DEBUG,
-                                "address-family not specified, guessing it "
-                                "to be unix from (transport.unix.connect-path: %s)", data_to_str (connect_path_data));
+                        gf_log (
+                          this->name, GF_LOG_DEBUG,
+                          "address-family not specified, guessing it "
+                          "to be unix from (transport.unix.connect-path: %s)",
+                          data_to_str (connect_path_data));
                         *sa_family = AF_UNIX;
                 }
 
         } else {
-                char *address_family = data_to_str (address_family_data);
+                char* address_family = data_to_str (address_family_data);
                 if (!strcasecmp (address_family, "unix")) {
                         *sa_family = AF_UNIX;
                 } else if (!strcasecmp (address_family, "inet")) {
@@ -202,21 +204,20 @@ out:
 }
 
 static int32_t
-af_inet_client_get_remote_sockaddr (rpc_transport_t *this,
-                                    struct sockaddr *sockaddr,
-                                    socklen_t *sockaddr_len)
+af_inet_client_get_remote_sockaddr (rpc_transport_t* this,
+                                    struct sockaddr* sockaddr,
+                                    socklen_t* sockaddr_len)
 {
-        dict_t *options = this->options;
-        data_t *remote_host_data = NULL;
-        data_t *remote_port_data = NULL;
-        char *remote_host = NULL;
+        dict_t* options = this->options;
+        data_t* remote_host_data = NULL;
+        data_t* remote_port_data = NULL;
+        char* remote_host = NULL;
         uint16_t remote_port = 0;
-        struct addrinfo_cyguv *addr_info = NULL;
+        struct addrinfo_cyguv* addr_info = NULL;
         int32_t ret = 0;
 
         remote_host_data = dict_get (options, "remote-host");
-        if (remote_host_data == NULL)
-        {
+        if (remote_host_data == NULL) {
                 gf_log (this->name, GF_LOG_ERROR,
                         "option remote-host missing in volume %s", this->name);
                 ret = -1;
@@ -224,30 +225,27 @@ af_inet_client_get_remote_sockaddr (rpc_transport_t *this,
         }
 
         remote_host = data_to_str (remote_host_data);
-        if (remote_host == NULL)
-        {
+        if (remote_host == NULL) {
                 gf_log (this->name, GF_LOG_ERROR,
-                        "option remote-host has data NULL in volume %s", this->name);
+                        "option remote-host has data NULL in volume %s",
+                        this->name);
                 ret = -1;
                 goto err;
         }
 
         remote_port_data = dict_get (options, "remote-port");
-        if (remote_port_data == NULL)
-        {
-                gf_log (this->name, GF_LOG_TRACE,
-                        "option remote-port missing in volume %s. Defaulting to %d",
-                        this->name, GF_DEFAULT_SOCKET_LISTEN_PORT);
+        if (remote_port_data == NULL) {
+                gf_log (
+                  this->name, GF_LOG_TRACE,
+                  "option remote-port missing in volume %s. Defaulting to %d",
+                  this->name, GF_DEFAULT_SOCKET_LISTEN_PORT);
 
                 remote_port = GF_DEFAULT_SOCKET_LISTEN_PORT;
-        }
-        else
-        {
+        } else {
                 remote_port = data_to_uint16 (remote_port_data);
         }
 
-        if (remote_port == (uint16_t)-1)
-        {
+        if (remote_port == (uint16_t)-1) {
                 gf_log (this->name, GF_LOG_ERROR,
                         "option remote-port has invalid port in volume %s",
                         this->name);
@@ -257,8 +255,8 @@ af_inet_client_get_remote_sockaddr (rpc_transport_t *this,
 
         /* TODO: gf_resolve is a blocking call. kick in some
            non blocking dns techniques */
-        ret = gf_resolve_ip6 (remote_host, remote_port,
-                              sockaddr->sa_family, &this->dnscache, &addr_info);
+        ret = gf_resolve_ip6 (remote_host, remote_port, sockaddr->sa_family,
+                              &this->dnscache, &addr_info);
         if (ret == -1) {
                 gf_log (this->name, GF_LOG_ERROR,
                         "DNS resolution failed on host %s", remote_host);
@@ -273,17 +271,17 @@ err:
 }
 
 static int32_t
-af_unix_client_get_remote_sockaddr (rpc_transport_t *this,
-                                    struct sockaddr *sockaddr,
-                                    socklen_t *sockaddr_len)
+af_unix_client_get_remote_sockaddr (rpc_transport_t* this,
+                                    struct sockaddr* sockaddr,
+                                    socklen_t* sockaddr_len)
 {
-        struct sockaddr_un *sockaddr_un = NULL;
-        char *connect_path = NULL;
-        data_t *connect_path_data = NULL;
+        struct sockaddr_un* sockaddr_un = NULL;
+        char* connect_path = NULL;
+        data_t* connect_path_data = NULL;
         int32_t ret = 0;
 
-        connect_path_data = dict_get (this->options,
-                                      "transport.socket.connect-path");
+        connect_path_data =
+          dict_get (this->options, "transport.socket.connect-path");
         if (!connect_path_data) {
                 gf_log (this->name, GF_LOG_ERROR,
                         "option transport.unix.connect-path not specified for "
@@ -300,17 +298,18 @@ af_unix_client_get_remote_sockaddr (rpc_transport_t *this,
                 goto err;
         }
 
-        if ((strlen (connect_path) + 1)  > UNIX_PATH_MAX) {
+        if ((strlen (connect_path) + 1) > UNIX_PATH_MAX) {
                 gf_log (this->name, GF_LOG_ERROR,
-                        "connect-path value length %"GF_PRI_SIZET" > %d octets",
+                        "connect-path value length %" GF_PRI_SIZET
+                        " > %d octets",
                         strlen (connect_path), UNIX_PATH_MAX);
                 ret = -1;
                 goto err;
         }
 
-        gf_log (this->name, GF_LOG_TRACE,
-                "using connect-path %s", connect_path);
-        sockaddr_un = (struct sockaddr_un *)sockaddr;
+        gf_log (this->name, GF_LOG_TRACE, "using connect-path %s",
+                connect_path);
+        sockaddr_un = (struct sockaddr_un*)sockaddr;
         strcpy (sockaddr_un->sun_path, connect_path);
         *sockaddr_len = sizeof (struct sockaddr_un);
 
@@ -319,18 +318,16 @@ err:
 }
 
 static int32_t
-af_unix_server_get_local_sockaddr (rpc_transport_t *this,
-                                   struct sockaddr *addr,
-                                   socklen_t *addr_len)
+af_unix_server_get_local_sockaddr (rpc_transport_t* this, struct sockaddr* addr,
+                                   socklen_t* addr_len)
 {
-        data_t *listen_path_data = NULL;
-        char *listen_path = NULL;
+        data_t* listen_path_data = NULL;
+        char* listen_path = NULL;
         int32_t ret = 0;
-        struct sockaddr_un *sunaddr = (struct sockaddr_un *)addr;
+        struct sockaddr_un* sunaddr = (struct sockaddr_un*)addr;
 
-
-        listen_path_data = dict_get (this->options,
-                                     "transport.socket.listen-path");
+        listen_path_data =
+          dict_get (this->options, "transport.socket.listen-path");
         if (!listen_path_data) {
                 gf_log (this->name, GF_LOG_ERROR,
                         "missing option transport.socket.listen-path");
@@ -344,10 +341,10 @@ af_unix_server_get_local_sockaddr (rpc_transport_t *this,
 #define UNIX_PATH_MAX 108
 #endif
 
-        if ((strlen (listen_path) + 1)  > UNIX_PATH_MAX) {
+        if ((strlen (listen_path) + 1) > UNIX_PATH_MAX) {
                 gf_log (this->name, GF_LOG_ERROR,
                         "option transport.unix.listen-path has value length "
-                        "%"GF_PRI_SIZET" > %d",
+                        "%" GF_PRI_SIZET " > %d",
                         strlen (listen_path), UNIX_PATH_MAX);
                 ret = -1;
                 goto err;
@@ -362,15 +359,14 @@ err:
 }
 
 static int32_t
-af_inet_server_get_local_sockaddr (rpc_transport_t *this,
-                                   struct sockaddr *addr,
-                                   socklen_t *addr_len)
+af_inet_server_get_local_sockaddr (rpc_transport_t* this, struct sockaddr* addr,
+                                   socklen_t* addr_len)
 {
         struct addrinfo_cyguv hints, *res = 0, *rp = NULL;
         data_t *listen_port_data = NULL, *listen_host_data = NULL;
         uint16_t listen_port = -1;
         char service[NI_MAXSERV], *listen_host = NULL;
-        dict_t *options = NULL;
+        dict_t* options = NULL;
         int32_t ret = 0;
 
         options = this->options;
@@ -378,30 +374,30 @@ af_inet_server_get_local_sockaddr (rpc_transport_t *this,
         listen_port_data = dict_get (options, "transport.socket.listen-port");
         listen_host_data = dict_get (options, "transport.socket.bind-address");
 
-        if (listen_port_data)
-        {
+        if (listen_port_data) {
                 listen_port = data_to_uint16 (listen_port_data);
         }
 
-        if (listen_port == (uint16_t) -1)
+        if (listen_port == (uint16_t)-1)
                 listen_port = GF_DEFAULT_SOCKET_LISTEN_PORT;
 
-
-        if (listen_host_data)
-        {
+        if (listen_host_data) {
                 listen_host = data_to_str (listen_host_data);
         } else {
                 if (addr->sa_family == AF_INET6) {
-                        struct sockaddr_in6_cyguv *in = (struct sockaddr_in6_cyguv *) addr;
-                        memcpy(&in->sin6_addr, &in6addr_any, sizeof(in->sin6_addr));
-                        in->sin6_port = htons(listen_port);
-                        *addr_len = sizeof(struct sockaddr_in6);
+                        struct sockaddr_in6_cyguv* in =
+                          (struct sockaddr_in6_cyguv*)addr;
+                        memcpy (&in->sin6_addr, &in6addr_any,
+                                sizeof (in->sin6_addr));
+                        in->sin6_port = htons (listen_port);
+                        *addr_len = sizeof (struct sockaddr_in6);
                         goto out;
                 } else if (addr->sa_family == AF_INET) {
-                        struct sockaddr_in_cyguv *in = (struct sockaddr_in *) addr;
-                        in->sin_addr.s_addr_cyguv = htonl(INADDR_ANY);
-                        in->sin_port = htons(listen_port);
-                        *addr_len = sizeof(struct sockaddr_in);
+                        struct sockaddr_in_cyguv* in =
+                          (struct sockaddr_in*)addr;
+                        in->sin_addr.s_addr_cyguv = htonl (INADDR_ANY);
+                        in->sin_port = htons (listen_port);
+                        *addr_len = sizeof (struct sockaddr_in);
                         goto out;
                 }
         }
@@ -412,9 +408,9 @@ af_inet_server_get_local_sockaddr (rpc_transport_t *this,
         memset (&hints, 0, sizeof (hints));
         hints.ai_family = addr->sa_family;
         hints.ai_socktype = SOCK_STREAM;
-        hints.ai_flags    = AI_PASSIVE | AI_ADDRCONFIG;
+        hints.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
 
-        ret = getaddrinfo(listen_host, service, &hints, &res);
+        ret = getaddrinfo (listen_host, service, &hints, &res);
         if (ret != 0) {
                 gf_log (this->name, GF_LOG_ERROR,
                         "getaddrinfo failed for host %s, service %s (%s)",
@@ -444,68 +440,69 @@ out:
 }
 
 int32_t
-client_bind (rpc_transport_t *this,
-             struct sockaddr *sockaddr,
-             socklen_t *sockaddr_len,
-             int sock)
+client_bind (rpc_transport_t* this, struct sockaddr* sockaddr,
+             socklen_t* sockaddr_len, int sock)
 {
         int ret = 0;
 
         *sockaddr_len = sizeof (struct sockaddr_in6);
-        switch (sockaddr->sa_family)
-        {
-        case AF_INET_SDP:
-        case AF_INET:
-                *sockaddr_len = sizeof (struct sockaddr_in);
+        switch (sockaddr->sa_family) {
+                case AF_INET_SDP:
+                case AF_INET:
+                        *sockaddr_len = sizeof (struct sockaddr_in);
 
-        case AF_INET6:
-                if (!this->bind_insecure) {
-                        ret = af_inet_bind_to_port_lt_ceiling (sock, sockaddr,
-                                                               *sockaddr_len,
-                                                               GF_CLIENT_PORT_CEILING);
-                        if (ret == -1) {
-                                gf_log (this->name, GF_LOG_DEBUG,
-                                        "cannot bind inet socket (%d) "
-                                        "to port less than %d (%s)",
-                                        sock, GF_CLIENT_PORT_CEILING,
-                                        strerror (errno));
-                                ret = 0;
+                case AF_INET6:
+                        if (!this->bind_insecure) {
+                                ret = af_inet_bind_to_port_lt_ceiling (
+                                  sock, sockaddr, *sockaddr_len,
+                                  GF_CLIENT_PORT_CEILING);
+                                if (ret == -1) {
+                                        gf_log (this->name, GF_LOG_DEBUG,
+                                                "cannot bind inet socket (%d) "
+                                                "to port less than %d (%s)",
+                                                sock, GF_CLIENT_PORT_CEILING,
+                                                strerror (errno));
+                                        ret = 0;
+                                }
+                        } else {
+                                ret = af_inet_bind_to_port_lt_ceiling (
+                                  sock, sockaddr, *sockaddr_len,
+                                  GF_IANA_PRIV_PORTS_START);
+                                if (ret == -1) {
+                                        gf_log (
+                                          this->name, GF_LOG_DEBUG,
+                                          "failed while binding to less than "
+                                          "%d (%s)",
+                                          GF_IANA_PRIV_PORTS_START,
+                                          strerror (errno));
+                                        ret = 0;
+                                }
                         }
-                } else {
-                        ret = af_inet_bind_to_port_lt_ceiling (sock, sockaddr,
-                                                               *sockaddr_len,
-                                                               GF_IANA_PRIV_PORTS_START);
-                        if (ret == -1) {
-                                gf_log (this->name, GF_LOG_DEBUG,
-                                        "failed while binding to less than "
-                                        "%d (%s)", GF_IANA_PRIV_PORTS_START,
-                                        strerror (errno));
-                                ret = 0;
-                        }
-                }
-                break;
+                        break;
 
-        case AF_UNIX:
-                *sockaddr_len = sizeof (struct sockaddr_un);
-                ret = af_unix_client_bind (this, (struct sockaddr *)sockaddr,
-                                           *sockaddr_len, sock);
-                break;
+                case AF_UNIX:
+                        *sockaddr_len = sizeof (struct sockaddr_un);
+                        ret =
+                          af_unix_client_bind (this, (struct sockaddr*)sockaddr,
+                                               *sockaddr_len, sock);
+                        break;
 
-        default:
-                gf_log (this->name, GF_LOG_ERROR,
-                        "unknown address family %d", sockaddr->sa_family);
-                ret = -1;
-                break;
+                default:
+                        gf_log (this->name, GF_LOG_ERROR,
+                                "unknown address family %d",
+                                sockaddr->sa_family);
+                        ret = -1;
+                        break;
         }
 
         return ret;
 }
 
 int32_t
-socket_client_get_remote_sockaddr (rpc_transport_t *this,
-                                   struct sockaddr *sockaddr,
-                                   socklen_t *sockaddr_len,
-                                   sa_family_t *sa_family)
+socket_client_get_remote_sockaddr (rpc_transport_t* this,
+                                   struct sockaddr* sockaddr,
+                                   socklen_t* sockaddr_len,
+                                   sa_family_t* sa_family)
 {
         int32_t ret = 0;
 
@@ -521,27 +518,27 @@ socket_client_get_remote_sockaddr (rpc_transport_t *this,
 
         *sa_family = sockaddr->sa_family;
 
-        switch (sockaddr->sa_family)
-        {
-        case AF_INET_SDP:
-                sockaddr->sa_family = AF_INET;
+        switch (sockaddr->sa_family) {
+                case AF_INET_SDP:
+                        sockaddr->sa_family = AF_INET;
 
-        case AF_INET:
-        case AF_INET6:
-        case AF_UNSPEC:
-                ret = af_inet_client_get_remote_sockaddr (this, sockaddr,
-                                                          sockaddr_len);
-                break;
+                case AF_INET:
+                case AF_INET6:
+                case AF_UNSPEC:
+                        ret = af_inet_client_get_remote_sockaddr (
+                          this, sockaddr, sockaddr_len);
+                        break;
 
-        case AF_UNIX:
-                ret = af_unix_client_get_remote_sockaddr (this, sockaddr,
-                                                          sockaddr_len);
-                break;
+                case AF_UNIX:
+                        ret = af_unix_client_get_remote_sockaddr (
+                          this, sockaddr, sockaddr_len);
+                        break;
 
-        default:
-                gf_log (this->name, GF_LOG_ERROR,
-                        "unknown address-family %d", sockaddr->sa_family);
-                ret = -1;
+                default:
+                        gf_log (this->name, GF_LOG_ERROR,
+                                "unknown address-family %d",
+                                sockaddr->sa_family);
+                        ret = -1;
         }
 
         if (*sa_family == AF_UNSPEC) {
@@ -552,19 +549,18 @@ err:
         return ret;
 }
 
-
 int32_t
-server_fill_address_family (rpc_transport_t *this, sa_family_t *sa_family)
+server_fill_address_family (rpc_transport_t* this, sa_family_t* sa_family)
 {
-        data_t  *address_family_data = NULL;
-        int32_t  ret                 = -1;
+        data_t* address_family_data = NULL;
+        int32_t ret = -1;
 
         GF_VALIDATE_OR_GOTO ("socket", sa_family, out);
 
-        address_family_data = dict_get (this->options,
-                                        "transport.address-family");
+        address_family_data =
+          dict_get (this->options, "transport.address-family");
         if (address_family_data) {
-                char *address_family = NULL;
+                char* address_family = NULL;
                 address_family = data_to_str (address_family_data);
 
                 if (!strcasecmp (address_family, "inet")) {
@@ -577,13 +573,15 @@ server_fill_address_family (rpc_transport_t *this, sa_family_t *sa_family)
                         *sa_family = AF_UNIX;
                 } else {
                         gf_log (this->name, GF_LOG_ERROR,
-                                "unknown address family (%s) specified", address_family);
+                                "unknown address family (%s) specified",
+                                address_family);
                         *sa_family = AF_UNSPEC;
                         goto out;
                 }
         } else {
-                gf_log (this->name, GF_LOG_DEBUG,
-                        "option address-family not specified, defaulting to inet");
+                gf_log (
+                  this->name, GF_LOG_DEBUG,
+                  "option address-family not specified, defaulting to inet");
                 *sa_family = AF_INET;
         }
 
@@ -592,10 +590,9 @@ out:
         return ret;
 }
 
-
 int32_t
-socket_server_get_local_sockaddr (rpc_transport_t *this, struct sockaddr *addr,
-                                  socklen_t *addr_len, sa_family_t *sa_family)
+socket_server_get_local_sockaddr (rpc_transport_t* this, struct sockaddr* addr,
+                                  socklen_t* addr_len, sa_family_t* sa_family)
 {
         int32_t ret = -1;
 
@@ -610,20 +607,21 @@ socket_server_get_local_sockaddr (rpc_transport_t *this, struct sockaddr *addr,
 
         *sa_family = addr->sa_family;
 
-        switch (addr->sa_family)
-        {
-        case AF_INET_SDP:
-                addr->sa_family = AF_INET;
+        switch (addr->sa_family) {
+                case AF_INET_SDP:
+                        addr->sa_family = AF_INET;
 
-        case AF_INET:
-        case AF_INET6:
-        case AF_UNSPEC:
-                ret = af_inet_server_get_local_sockaddr (this, addr, addr_len);
-                break;
+                case AF_INET:
+                case AF_INET6:
+                case AF_UNSPEC:
+                        ret = af_inet_server_get_local_sockaddr (this, addr,
+                                                                 addr_len);
+                        break;
 
-        case AF_UNIX:
-                ret = af_unix_server_get_local_sockaddr (this, addr, addr_len);
-                break;
+                case AF_UNIX:
+                        ret = af_unix_server_get_local_sockaddr (this, addr,
+                                                                 addr_len);
+                        break;
         }
 
         if (*sa_family == AF_UNSPEC) {
@@ -635,73 +633,74 @@ err:
 }
 
 int32_t
-get_transport_identifiers (rpc_transport_t *this)
+get_transport_identifiers (rpc_transport_t* this)
 {
-        socket_private_t *priv = NULL;
+        socket_private_t* priv = NULL;
         int32_t ret = 0;
         char is_inet_sdp = 0;
+        uv_getnameinfo_t name_req;
 
         priv = this->private;
 
-        switch (((struct sockaddr *) &this->myinfo.sockaddr)->sa_family)
-        {
-        case AF_INET_SDP:
-                is_inet_sdp = 1;
-                ((struct sockaddr *) &this->peerinfo.sockaddr)->sa_family = ((struct sockaddr *) &this->myinfo.sockaddr)->sa_family = AF_INET;
+        switch (((struct sockaddr*)&this->myinfo.sockaddr)->sa_family) {
+                case AF_INET_SDP:
+                        is_inet_sdp = 1;
+                        ((struct sockaddr*)&this->peerinfo.sockaddr)
+                          ->sa_family =
+                          ((struct sockaddr*)&this->myinfo.sockaddr)
+                            ->sa_family = AF_INET;
 
-        case AF_INET:
-        case AF_INET6:
-        {
-                ret = uv_getnameinfo(priv->handle.sock.loop, &priv->read_req.nameinfo_req,
-                                     NULL,
-                        (struct sockaddr*)&this->peerinfo.sockaddr, 0);
-                if (ret != 0) {
+                case AF_INET:
+                case AF_INET6: {
+                        ret = uv_getnameinfo (
+                          priv->handle.sock.loop, &name_req, NULL,
+                          (struct sockaddr*)&this->peerinfo.sockaddr, 0);
+                        if (ret != 0) {
+                                gf_log (this->name, GF_LOG_ERROR,
+                                        "getnameinfo failed (%s)",
+                                        uv_strerror (ret));
+                        } else {
+                                sprintf (this->peerinfo.identifier, "%s:%s",
+                                         name_req.host, name_req.service);
+                        }
+
+                        ret = uv_getnameinfo (
+                          priv->handle.sock.loop, &name_req, NULL,
+                          (struct sockaddr*)&this->myinfo.sockaddr, 0);
+                        if (ret != 0) {
+                                gf_log (this->name, GF_LOG_ERROR,
+                                        "getnameinfo failed (%s)",
+                                        uv_strerror (ret));
+                        } else {
+                                sprintf (this->myinfo.identifier, "%s:%s",
+                                         name_req.host, name_req.service);
+                        }
+
+                        if (is_inet_sdp) {
+                                ((struct sockaddr*)&this->peerinfo.sockaddr)
+                                  ->sa_family =
+                                  ((struct sockaddr*)&this->myinfo.sockaddr)
+                                    ->sa_family = AF_INET_SDP;
+                        }
+                } break;
+
+                case AF_UNIX: {
+                        struct sockaddr_un* sunaddr = NULL;
+
+                        sunaddr = (struct sockaddr_un*)&this->myinfo.sockaddr;
+                        strcpy (this->myinfo.identifier, sunaddr->sun_path);
+
+                        sunaddr = (struct sockaddr_un*)&this->peerinfo.sockaddr;
+                        strcpy (this->peerinfo.identifier, sunaddr->sun_path);
+                } break;
+
+                default:
                         gf_log (this->name, GF_LOG_ERROR,
-                                "getnameinfo failed (%s)", uv_strerror (ret));
-                }
-                else {
-                        sprintf (this->peerinfo.identifier, "%s:%s",
-                                priv->read_req.nameinfo_req.host,
-                                priv->read_req.nameinfo_req.service);
-                }
-
-                ret = uv_getnameinfo(priv->handle.sock.loop, &priv->read_req.nameinfo_req,
-                        NULL,
-                        (struct sockaddr*)&this->myinfo.sockaddr, 0);
-                if (ret != 0) {
-                        gf_log (this->name, GF_LOG_ERROR,
-                                "getnameinfo failed (%s)", uv_strerror (ret));
-                }
-                else {
-                        sprintf (this->myinfo.identifier, "%s:%s",
-                                priv->read_req.nameinfo_req.host,
-                                priv->read_req.nameinfo_req.service);
-                }
-
-                if (is_inet_sdp) {
-                        ((struct sockaddr *) &this->peerinfo.sockaddr)->sa_family = ((struct sockaddr *) &this->myinfo.sockaddr)->sa_family = AF_INET_SDP;
-                }
-        }
-        break;
-
-        case AF_UNIX:
-        {
-                struct sockaddr_un *sunaddr = NULL;
-
-                sunaddr = (struct sockaddr_un *) &this->myinfo.sockaddr;
-                strcpy (this->myinfo.identifier, sunaddr->sun_path);
-
-                sunaddr = (struct sockaddr_un *) &this->peerinfo.sockaddr;
-                strcpy (this->peerinfo.identifier, sunaddr->sun_path);
-        }
-        break;
-
-        default:
-                gf_log (this->name, GF_LOG_ERROR,
-                        "unknown address family (%d)",
-                        ((struct sockaddr *) &this->myinfo.sockaddr)->sa_family);
-                ret = -1;
-                break;
+                                "unknown address family (%d)",
+                                ((struct sockaddr*)&this->myinfo.sockaddr)
+                                  ->sa_family);
+                        ret = -1;
+                        break;
         }
 
 err:
