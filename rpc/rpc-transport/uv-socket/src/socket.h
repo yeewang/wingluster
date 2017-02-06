@@ -108,6 +108,11 @@ typedef enum {
                                     */
 } sp_rpcfrag_request_header_state_t;
 
+typedef enum {
+	AR_SOCKET_SHUTDOWN,
+        AR_SOCKET_CLOSE,
+} action_req_t;
+
 struct ioq {
         union {
                 struct list_head list;
@@ -125,12 +130,12 @@ struct ioq {
         struct iobref     *iobref;
 };
 
-struct read_ioq {
+struct bufq {
         union {
                 struct list_head list;
                 struct {
-                        struct read_ioq  *next;
-                        struct read_ioq  *prev;
+                        struct bufq  *next;
+                        struct bufq  *prev;
                 };
         };
 
@@ -138,12 +143,12 @@ struct read_ioq {
         size_t             read;
 };
 
-struct write_ioq {
+struct write_q {
         union {
                 struct list_head list;
                 struct {
-                        struct write_ioq  *next;
-                        struct write_ioq  *prev;
+                        struct write_q  *next;
+                        struct write_q  *prev;
                 };
         };
 
@@ -164,6 +169,23 @@ struct req_buf {
 		uv_write_t write_req;
         };
 };
+
+struct action_req {
+        union {
+                struct list_head list;
+                struct {
+                        struct action_req  *next;
+                        struct action_req  *prev;
+                };
+        };
+
+	pthread_mutex_t mutex;
+	pthread_cond_t  cond;
+	action_req_t	type;
+	int 		sync;
+	int 		ret;
+};
+
 
 typedef struct {
         sp_rpcfrag_request_header_state_t header_state;
@@ -285,18 +307,26 @@ typedef struct {
         ssize_t                result;
 
         union {
-                struct list_head        read_ioq;
+                struct list_head         read_q;
                 struct {
-                        struct read_ioq *read_ioq_next;
-                        struct read_ioq *read_ioq_prev;
+                        struct bufq 	*read_q_next;
+                        struct bufq 	*read_q_prev;
                 };
         };
 
 	union {
-                struct list_head        write_ioq;
+                struct list_head         write_q;
                 struct {
-                        struct write_ioq *write_ioq_next;
-                        struct write_ioq *write_ioq_prev;
+                        struct write_q	*write_q_next;
+                        struct write_q  *write_q_prev;
+                };
+        };
+
+	union {
+                struct list_head        action_req;
+                struct {
+                        struct action_req *action_req_next;
+                        struct action_req *action_req_prev;
                 };
         };
 
@@ -313,8 +343,10 @@ typedef struct {
                 };
         };
         struct gf_sock_incoming incoming;
+	int 		       outgoing;
         pthread_mutex_t        lock;
-        int                    windowsize;
+	pthread_cond_t         cond;
+	int                    windowsize;
         char                   lowlat;
         char                   nodelay;
         int                    keepalive;
@@ -337,7 +369,7 @@ typedef struct {
 	char                  *ssl_ca_list;
 	pthread_t              thread;
 
-        uv_async_t             notify_read;
+        uv_async_t             action_handle;
 	uv_async_t             notify_write;
 
 	gf_boolean_t           own_thread;

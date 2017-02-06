@@ -39,8 +39,6 @@ typedef int (*event_handler_t) (int fd, int idx, void *data,
 				int poll_in, int poll_out, int poll_err);
 #else
 typedef int (*event_init_handler_t) (uv_loop_t *loop, void *translator);
-typedef int (*event_handler_t) (void *data, int status,
-				int poll_in, int poll_out, int poll_err);
 #endif
 
 #define EVENT_EPOLL_TABLES 1024
@@ -170,9 +168,7 @@ struct event_ops {
         int (*event_register) (struct event_pool *event_pool,
                                void *ctx,
                                void *handle,
-                               event_init_handler_t init,
-                               event_handler_t handler,
-                               int poll_in, int poll_out);
+                               event_init_handler_t init);
 
         int (*event_select_on) (struct event_pool *event_pool, void *handle,
                                 int poll_in, int poll_out);
@@ -196,9 +192,7 @@ int event_select_on (struct event_pool *event_pool, void *handle,
 int event_register (struct event_pool *event_pool,
                     void *ctx,
                     void *handle,
-                    event_init_handler_t init,
-		    event_handler_t handler,
-		    int poll_in, int poll_out);
+                    event_init_handler_t init);
 int event_unregister (struct event_pool *event_pool, void *handle);
 int event_unregister_close (struct event_pool *event_pool, void *handle);
 int event_dispatch (struct event_pool *event_pool);

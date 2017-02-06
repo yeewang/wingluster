@@ -10,36 +10,34 @@
   cases as published by the Free Software Foundation.
 */
 
-#include <pthread.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <stdlib.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
-#include "logging.h"
-#include "event.h"
-#include "mem-pool.h"
 #include "common-utils.h"
+#include "event.h"
 #include "libglusterfs-messages.h"
+#include "logging.h"
+#include "mem-pool.h"
 
 #ifndef _CONFIG_H
 #define _CONFIG_H
 #include "config.h"
 #endif
 
-
-
-struct event_pool *
+struct event_pool*
 event_pool_new (int count, int eventthreadcount)
 {
-        struct event_pool *event_pool = NULL;
-	extern struct event_ops event_ops_poll;
+        struct event_pool* event_pool = NULL;
+        extern struct event_ops event_ops_poll;
 
 #ifdef HAVE_SYS_EPOLL_H
-	extern struct event_ops event_ops_epoll;
+        extern struct event_ops event_ops_epoll;
 
-        event_pool = event_ops_epoll.new (count, eventthreadcount);
+        event_pool = event_ops_epoll.new(count, eventthreadcount);
 
         if (event_pool) {
                 event_pool->ops = &event_ops_epoll;
@@ -50,7 +48,7 @@ event_pool_new (int count, int eventthreadcount)
 #endif
 
         if (!event_pool) {
-                event_pool = event_ops_poll.new (count, eventthreadcount);
+                event_pool = event_ops_poll.new(count, eventthreadcount);
 
                 if (event_pool)
                         event_pool->ops = &event_ops_poll;
@@ -60,27 +58,21 @@ event_pool_new (int count, int eventthreadcount)
 }
 
 int
-event_register (struct event_pool *event_pool,
-                void *translator,
-                void *handle,
-                event_init_handler_t init,
-                event_handler_t handler,
-                int poll_in, int poll_out)
+event_register (struct event_pool* event_pool, void* translator, void* handle,
+                event_init_handler_t init)
 {
         int ret = -1;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
         ret = event_pool->ops->event_register (event_pool, translator, handle,
-                                               init, handler,
-                                               poll_in, poll_out);
+                                               init);
 out:
         return ret;
 }
 
-
 int
-event_unregister (struct event_pool *event_pool, void *handle)
+event_unregister (struct event_pool* event_pool, void* handle)
 {
         int ret = -1;
 
@@ -92,9 +84,8 @@ out:
         return ret;
 }
 
-
 int
-event_unregister_close (struct event_pool *event_pool, void *handle)
+event_unregister_close (struct event_pool* event_pool, void* handle)
 {
         int ret = -1;
 
@@ -106,24 +97,22 @@ out:
         return ret;
 }
 
-
 int
-event_select_on (struct event_pool *event_pool, void *handle,
-                 int poll_in, int poll_out)
+event_select_on (struct event_pool* event_pool, void* handle, int poll_in,
+                 int poll_out)
 {
         int ret = -1;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        ret = event_pool->ops->event_select_on (event_pool, handle,
-                                                poll_in, poll_out);
+        ret = event_pool->ops->event_select_on (event_pool, handle, poll_in,
+                                                poll_out);
 out:
         return ret;
 }
 
-
 int
-event_dispatch (struct event_pool *event_pool)
+event_dispatch (struct event_pool* event_pool)
 {
         int ret = -1;
 
@@ -136,22 +125,21 @@ out:
 }
 
 int
-event_reconfigure_threads (struct event_pool *event_pool, int value)
+event_reconfigure_threads (struct event_pool* event_pool, int value)
 {
         int ret = -1;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
         /* call event refresh function */
-        ret = event_pool->ops->event_reconfigure_threads (event_pool,
-                                                          value);
+        ret = event_pool->ops->event_reconfigure_threads (event_pool, value);
 
 out:
         return ret;
 }
 
 int
-event_pool_destroy (struct event_pool *event_pool)
+event_pool_destroy (struct event_pool* event_pool)
 {
         int ret = -1;
         int destroy = 0, activethreadcount = 0;
@@ -174,13 +162,13 @@ out:
 }
 
 int
-poller_destroy_handler (int fd, int idx, void *data,
-                       int poll_out, int poll_in, int poll_err)
+poller_destroy_handler (int fd, int idx, void* data, int poll_out, int poll_in,
+                        int poll_err)
 {
         int readfd = -1;
         char buf = '\0';
 
-        readfd = *(int *)data;
+        readfd = *(int*)data;
         if (readfd < 0)
                 return -1;
 
@@ -201,13 +189,15 @@ poller_destroy_handler (int fd, int idx, void *data,
  *   threads are destroyed)
  */
 int
-event_dispatch_destroy (struct event_pool *event_pool)
+event_dispatch_destroy (struct event_pool* event_pool)
 {
-        int  ret     = -1;
-        int  fd[2]   = {-1};
-        int  idx     = -1;
-        int  flags   = 0;
-        struct timespec   sleep_till = {0, };
+        int ret = -1;
+        int fd[2] = { -1 };
+        int idx = -1;
+        int flags = 0;
+        struct timespec sleep_till = {
+                0,
+        };
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
@@ -216,24 +206,22 @@ event_dispatch_destroy (struct event_pool *event_pool)
                 goto out;
 
         /* Make the read end of the pipe nonblocking */
-        flags = fcntl(fd[0], F_GETFL);
+        flags = fcntl (fd[0], F_GETFL);
         flags |= O_NONBLOCK;
-        ret = fcntl(fd[0], F_SETFL, flags);
+        ret = fcntl (fd[0], F_SETFL, flags);
         if (ret < 0)
                 goto out;
 
         /* Make the write end of the pipe nonblocking */
-        flags = fcntl(fd[1], F_GETFL);
+        flags = fcntl (fd[1], F_GETFL);
         flags |= O_NONBLOCK;
-        fcntl(fd[1], F_SETFL, flags);
+        fcntl (fd[1], F_SETFL, flags);
         if (ret < 0)
                 goto out;
 
         /* From the main thread register an event on the pipe fd[0],
          */
-        idx = event_register (event_pool, fd[0], poller_destroy_handler,
-                              0,
-                              &fd[1], 1, 0);
+        idx = event_register (event_pool, fd[0], poller_destroy_handler, NULL);
         if (idx < 0)
                 goto out;
 
@@ -265,16 +253,15 @@ event_dispatch_destroy (struct event_pool *event_pool)
                         if (write (fd[1], "dummy", 6) == -1)
                                 break;
                         sleep_till.tv_sec = time (NULL) + 1;
-                        ret = pthread_cond_timedwait (&event_pool->cond,
-                                                      &event_pool->mutex,
-                                                      &sleep_till);
+                        ret = pthread_cond_timedwait (
+                          &event_pool->cond, &event_pool->mutex, &sleep_till);
                 }
         }
         pthread_mutex_unlock (&event_pool->mutex);
 
         ret = event_unregister (event_pool, idx);
 
- out:
+out:
         if (fd[0] != -1)
                 close (fd[0]);
         if (fd[1] != -1)
