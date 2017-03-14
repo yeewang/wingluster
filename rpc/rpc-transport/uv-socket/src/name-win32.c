@@ -24,110 +24,123 @@
 #define AI_ADDRCONFIG 0
 #endif /* AI_ADDRCONFIG */
 
-static void
-_assign_port (struct sockaddr* sockaddr, uint16_t port)
+struct dnscache6
 {
-        switch (sockaddr->sa_family) {
-                case AF_INET6:
-                        ((struct sockaddr_in6*)sockaddr)->sin6_port =
-                          htons (port);
-                        break;
-
-                case AF_INET_SDP:
-                case AF_INET:
-                        ((struct sockaddr_in*)sockaddr)->sin_port =
-                          htons (port);
-                        break;
-        }
-}
+        struct addrinfo* first;
+        struct addrinfo* next;
+};
 
 static int32_t
-af_inet_bind_to_port_lt_ceiling (int fd, struct sockaddr* sockaddr,
-                                 socklen_t sockaddr_len, uint32_t ceiling)
+gf_resolve_ip6 (uv_loop_t* loop, const char* hostname, uint16_t port,
+                int family, void** dnscache, struct addrinfo** addr_info)
 {
-        int32_t ret = -1;
-        uint16_t port = ceiling - 1;
-        gf_boolean_t ports[GF_PORT_MAX];
-        int i = 0;
-
-loop:
-        ret = gf_process_reserved_ports (ports, ceiling);
-
-        while (port) {
-                if (port == GF_CLIENT_PORT_CEILING) {
-                        ret = -1;
-                        break;
-                }
-
-                /* ignore the reserved ports */
-                if (ports[port] == _gf_true) {
-                        port--;
-                        continue;
-                }
-
-                _assign_port (sockaddr, port);
-
-                ret = bind (fd, sockaddr, sockaddr_len);
-
-                if (ret == 0)
-                        break;
-
-                if (ret == -1 && errno == EACCES)
-                        break;
-
-                port--;
-        }
-
-        /* Incase if all the secure ports are exhausted, we are no more
-         * binding to secure ports, hence instead of getting a random
-         * port, lets define the range to restrict it from getting from
-         * ports reserved for bricks i.e from range of 49152 - 65535
-         * which further may lead to port clash */
-        if (!port) {
-                ceiling = port = GF_CLNT_INSECURE_PORT_CEILING;
-                for (i = 0; i <= ceiling; i++)
-                        ports[i] = _gf_false;
-                goto loop;
-        }
-
-        return ret;
-}
-
-static int32_t
-af_unix_client_bind (rpc_transport_t* this, struct sockaddr* sockaddr,
-                     socklen_t sockaddr_len, int sock)
-{
-        data_t* path_data = NULL;
-        struct sockaddr_un* addr = NULL;
         int32_t ret = 0;
+        struct addrinfo hints;
+        struct dnscache6* cache = NULL;
+        uv_getnameinfo_t name_req;
+        uv_getaddrinfo_t addrinfo_req;
 
-        path_data = dict_get (this->options, "transport.socket.bind-path");
-        if (path_data) {
-                char* path = data_to_str (path_data);
-                if (!path || strlen (path) > UNIX_PATH_MAX) {
-                        gf_log (this->name, GF_LOG_TRACE,
-                                "bind-path not specified for unix socket, "
-                                "letting connect to assign default value");
-                        goto err;
-                }
-
-                addr = (struct sockaddr_un*)sockaddr;
-                strcpy (addr->sun_path, path);
-                ret = bind (sock, (struct sockaddr*)addr, sockaddr_len);
-                if (ret == -1) {
-                        gf_log (this->name, GF_LOG_ERROR,
-                                "cannot bind to unix-domain socket %d (%s)",
-                                sock, strerror (errno));
-                        goto err;
-                }
-        } else {
-                gf_log (this->name, GF_LOG_TRACE,
-                        "bind-path not specified for unix socket, "
-                        "letting connect to assign default value");
+        if (!hostname) {
+                gf_msg_callingfn ("resolver", GF_LOG_WARNING, 0,
+                                  LG_MSG_HOSTNAME_NULL, "hostname is NULL");
+                return -1;
         }
+
+        if (!*dnscache) {
+                *dnscache = GF_CALLOC (1, sizeof (struct dnscache6),
+                                       gf_common_mt_dnscache6);
+                if (!*dnscache)
+                        return -1;
+        }
+
+        cache = *dnscache;
+        if (cache->first && !cache->next) {
+                uv_freeaddrinfo (cache->first);
+                cache->first = cache->next = NULL;
+                gf_msg_trace ("resolver", 0, "flushing DNS cache");
+        }
+
+        if (!cache->first) {
+                char* port_str = NULL;
+                gf_msg_trace ("resolver", 0, "DNS cache not present, freshly "
+                                             "probing hostname: %s",
+                              hostname);
+
+                memset (&hints, 0, sizeof (hints));
+                hints.ai_family = family;
+                hints.ai_socktype = SOCK_STREAM;
+#ifndef __NetBSD__
+                hints.ai_flags = AI_ADDRCONFIG;
+#endif
+
+                ret = gf_asprintf (&port_str, "%d", port);
+                if (-1 == ret) {
+                        return -1;
+                }
+                if ((ret = uv_getaddrinfo (loop, &addrinfo_req, NULL, hostname,
+                                           port_str, &hints)) != 0) {
+                        gf_msg ("resolver", GF_LOG_ERROR, 0,
+                                LG_MSG_GETADDRINFO_FAILED, "getaddrinfo failed"
+                                                           " (%s)",
+                                gai_strerror (ret));
+
+                        GF_FREE (*dnscache);
+                        *dnscache = NULL;
+                        GF_FREE (port_str);
+                        return -1;
+                }
+                cache->first = (struct addrinfo_cyguv*)addrinfo_req.addrinfo;
+                GF_FREE (port_str);
+
+                cache->next = cache->first;
+        }
+
+        if (cache->next) {
+                ret = uv_getnameinfo (loop, &name_req, NULL,
+                                      (struct sockaddr*)cache->next->ai_addr,
+                                      NI_NUMERICHOST);
+                if (ret != 0) {
+                        gf_msg ("resolver", GF_LOG_ERROR, 0,
+                                LG_MSG_GETNAMEINFO_FAILED, "getnameinfo failed"
+                                                           " (%s)",
+                                gai_strerror (ret));
+                        goto err;
+                }
+
+                gf_msg_debug ("resolver", 0, "returning ip-%s (port-%s) for "
+                                             "hostname: %s and port: %d",
+                              name_req.host, name_req.service, hostname, port);
+
+                *addr_info = cache->next;
+        }
+
+        if (cache->next)
+                cache->next = cache->next->ai_next;
+        if (cache->next) {
+                ret = uv_getnameinfo (loop, &name_req, NULL,
+                                      (struct sockaddr*)cache->next->ai_addr,
+                                      NI_NUMERICHOST);
+                if (ret != 0) {
+                        gf_msg ("resolver", GF_LOG_ERROR, 0,
+                                LG_MSG_GETNAMEINFO_FAILED, "getnameinfo failed"
+                                                           " (%s)",
+                                gai_strerror (ret));
+                        goto err;
+                }
+
+                gf_msg_debug ("resolver", 0, "next DNS query will return: "
+                                             "ip-%s port-%s",
+                              name_req.host, name_req.service);
+        }
+
+        return 0;
 
 err:
-        return ret;
+        uv_freeaddrinfo (cache->first);
+        cache->first = cache->next = NULL;
+        GF_FREE (cache);
+        *dnscache = NULL;
+        return -1;
 }
 
 int32_t
@@ -208,6 +221,7 @@ af_inet_client_get_remote_sockaddr (rpc_transport_t* this,
                                     struct sockaddr* sockaddr,
                                     socklen_t* sockaddr_len)
 {
+        socket_private_t* priv = NULL;
         dict_t* options = this->options;
         data_t* remote_host_data = NULL;
         data_t* remote_port_data = NULL;
@@ -215,6 +229,8 @@ af_inet_client_get_remote_sockaddr (rpc_transport_t* this,
         uint16_t remote_port = 0;
         struct addrinfo_cyguv* addr_info = NULL;
         int32_t ret = 0;
+
+        priv = this->private;
 
         remote_host_data = dict_get (options, "remote-host");
         if (remote_host_data == NULL) {
@@ -255,8 +271,8 @@ af_inet_client_get_remote_sockaddr (rpc_transport_t* this,
 
         /* TODO: gf_resolve is a blocking call. kick in some
            non blocking dns techniques */
-        ret = gf_resolve_ip6 (remote_host, remote_port, sockaddr->sa_family,
-                              &this->dnscache, &addr_info);
+        ret = gf_resolve_ip6 (priv->handle.sock.loop, remote_host, remote_port,
+                              sockaddr->sa_family, &this->dnscache, &addr_info);
         if (ret == -1) {
                 gf_log (this->name, GF_LOG_ERROR,
                         "DNS resolution failed on host %s", remote_host);
@@ -362,13 +378,16 @@ static int32_t
 af_inet_server_get_local_sockaddr (rpc_transport_t* this, struct sockaddr* addr,
                                    socklen_t* addr_len)
 {
+        socket_private_t* priv = NULL;
         struct addrinfo_cyguv hints, *res = 0, *rp = NULL;
         data_t *listen_port_data = NULL, *listen_host_data = NULL;
         uint16_t listen_port = -1;
         char service[NI_MAXSERV], *listen_host = NULL;
         dict_t* options = NULL;
+        uv_getaddrinfo_t addrinfo_req;
         int32_t ret = 0;
 
+        priv = this->private;
         options = this->options;
 
         listen_port_data = dict_get (options, "transport.socket.listen-port");
@@ -394,7 +413,7 @@ af_inet_server_get_local_sockaddr (rpc_transport_t* this, struct sockaddr* addr,
                         goto out;
                 } else if (addr->sa_family == AF_INET) {
                         struct sockaddr_in_cyguv* in =
-                          (struct sockaddr_in*)addr;
+                          (struct sockaddr_in_cyguv*)addr;
                         in->sin_addr.s_addr_cyguv = htonl (INADDR_ANY);
                         in->sin_port = htons (listen_port);
                         *addr_len = sizeof (struct sockaddr_in);
@@ -410,7 +429,8 @@ af_inet_server_get_local_sockaddr (rpc_transport_t* this, struct sockaddr* addr,
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
 
-        ret = getaddrinfo (listen_host, service, &hints, &res);
+        ret = uv_getaddrinfo (priv->handle.sock.loop, &addrinfo_req, NULL,
+                              listen_host, service, &hints);
         if (ret != 0) {
                 gf_log (this->name, GF_LOG_ERROR,
                         "getaddrinfo failed for host %s, service %s (%s)",
@@ -418,6 +438,9 @@ af_inet_server_get_local_sockaddr (rpc_transport_t* this, struct sockaddr* addr,
                 ret = -1;
                 goto out;
         }
+
+        res = (struct addrinfo_cyguv*)addrinfo_req.addrinfo;
+
         /* IPV6 server can handle both ipv4 and ipv6 clients */
         for (rp = res; rp != NULL; rp = rp->ai_next) {
                 if (rp->ai_addr == NULL)
@@ -433,68 +456,9 @@ af_inet_server_get_local_sockaddr (rpc_transport_t* this, struct sockaddr* addr,
                 *addr_len = res->ai_addrlen;
         }
 
-        freeaddrinfo (res);
+        uv_freeaddrinfo ((struct addrinfo*)res);
 
 out:
-        return ret;
-}
-
-int32_t
-client_bind (rpc_transport_t* this, struct sockaddr* sockaddr,
-             socklen_t* sockaddr_len, int sock)
-{
-        int ret = 0;
-
-        *sockaddr_len = sizeof (struct sockaddr_in6);
-        switch (sockaddr->sa_family) {
-                case AF_INET_SDP:
-                case AF_INET:
-                        *sockaddr_len = sizeof (struct sockaddr_in);
-
-                case AF_INET6:
-                        if (!this->bind_insecure) {
-                                ret = af_inet_bind_to_port_lt_ceiling (
-                                  sock, sockaddr, *sockaddr_len,
-                                  GF_CLIENT_PORT_CEILING);
-                                if (ret == -1) {
-                                        gf_log (this->name, GF_LOG_DEBUG,
-                                                "cannot bind inet socket (%d) "
-                                                "to port less than %d (%s)",
-                                                sock, GF_CLIENT_PORT_CEILING,
-                                                strerror (errno));
-                                        ret = 0;
-                                }
-                        } else {
-                                ret = af_inet_bind_to_port_lt_ceiling (
-                                  sock, sockaddr, *sockaddr_len,
-                                  GF_IANA_PRIV_PORTS_START);
-                                if (ret == -1) {
-                                        gf_log (
-                                          this->name, GF_LOG_DEBUG,
-                                          "failed while binding to less than "
-                                          "%d (%s)",
-                                          GF_IANA_PRIV_PORTS_START,
-                                          strerror (errno));
-                                        ret = 0;
-                                }
-                        }
-                        break;
-
-                case AF_UNIX:
-                        *sockaddr_len = sizeof (struct sockaddr_un);
-                        ret =
-                          af_unix_client_bind (this, (struct sockaddr*)sockaddr,
-                                               *sockaddr_len, sock);
-                        break;
-
-                default:
-                        gf_log (this->name, GF_LOG_ERROR,
-                                "unknown address family %d",
-                                sockaddr->sa_family);
-                        ret = -1;
-                        break;
-        }
-
         return ret;
 }
 
@@ -659,6 +623,7 @@ get_transport_identifiers (rpc_transport_t* this)
                                 gf_log (this->name, GF_LOG_ERROR,
                                         "getnameinfo failed (%s)",
                                         uv_strerror (ret));
+                                goto err;
                         } else {
                                 sprintf (this->peerinfo.identifier, "%s:%s",
                                          name_req.host, name_req.service);
@@ -671,6 +636,7 @@ get_transport_identifiers (rpc_transport_t* this)
                                 gf_log (this->name, GF_LOG_ERROR,
                                         "getnameinfo failed (%s)",
                                         uv_strerror (ret));
+                                goto err;
                         } else {
                                 sprintf (this->myinfo.identifier, "%s:%s",
                                          name_req.host, name_req.service);

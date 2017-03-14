@@ -187,9 +187,6 @@ typedef int (*gf_cmp) (void *, void *);
 
 void gf_global_variable_init(void);
 
-int32_t gf_resolve_ip6 (const char *hostname, uint16_t port, int family,
-                        void **dnscache, struct addrinfo **addr_info);
-
 void gf_log_dump_graph (FILE *specfp, glusterfs_graph_t *graph);
 void gf_print_trace (int32_t signal, glusterfs_ctx_t *ctx);
 int  gf_set_log_file_path (cmd_args_t *cmd_args);

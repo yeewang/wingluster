@@ -24,8 +24,7 @@
 enum broker_type
 {
         INIT = 1,
-        READ = 2,
-        WRITE = 4,
+        REINIT = 2,
 };
 
 struct broker_data
@@ -40,11 +39,11 @@ struct reg_data
         void* translator;
         uv_handle_t* handle;
         int events;
-        event_init_handler_t init;
+        event_handler_t handler;
 };
 
 static int event_register_poll (struct event_pool* event_pool, void* translator,
-                                void* handle, event_init_handler_t init);
+                                void* handle, event_handler_t handler);
 
 static int event_unregister_poll (struct event_pool* event_pool, void* handle);
 
@@ -57,6 +56,9 @@ static void __event_async_cb (uv_async_t* handle);
 
 static void __event_handler (struct event_pool* event_pool,
                              struct event_node* event_node);
+
+static void __event_handler_all (struct event_pool* event_pool);
+
 
 static struct reg_data*
 __event_getindex (struct event_pool* event_pool, void* handle)
@@ -77,6 +79,38 @@ __event_getindex (struct event_pool* event_pool, void* handle)
         }
 out:
         return retval;
+}
+
+static int
+__event_invoke (struct event_pool* event_pool, int type, void* handle)
+{
+        struct event_node* new_event = NULL;
+        struct broker_data* bd = NULL;
+        int ret = -1;
+
+	new_event = GF_CALLOC (1, sizeof (struct broker_data) +
+				    sizeof (struct event_node),
+			       gf_common_mt_data_t);
+	if (new_event == NULL) {
+		ret = -1;
+		goto fail;
+	}
+	bd = (struct broker_data*)new_event->event;
+	bd->type = type;
+	bd->handle = handle;
+
+	list_add_tail (&new_event->list, &event_pool->events.list);
+
+	if (event_pool->poller == pthread_self()) {
+		__event_handler_all (event_pool);
+		ret = 0;
+	}
+	else {
+	        ret = uv_async_send (&event_pool->broker);
+	}
+
+fail:
+        return ret;
 }
 
 static struct event_pool*
@@ -129,7 +163,7 @@ event_pool_new_poll (int count, int eventthreadcount)
 
 static int
 event_register_poll (struct event_pool* event_pool, void* translator,
-                     void* handle, event_init_handler_t init)
+                     void* handle, event_handler_t handler)
 {
         uv_loop_t* loop = NULL;
         struct reg_node* new_reg = NULL;
@@ -144,8 +178,7 @@ event_register_poll (struct event_pool* event_pool, void* translator,
         GF_VALIDATE_OR_GOTO ("event", handle, out);
 
         gf_msg ("poll", GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-                "Registering a new handle %p to the pool",
-                handle);
+                "Registering a new handle %p to the pool", handle);
 
         pthread_mutex_lock (&event_pool->mutex);
         {
@@ -153,7 +186,7 @@ event_register_poll (struct event_pool* event_pool, void* translator,
                         need_clean = 1;
 
                 if (need_clean) {
-                        ret = 1;
+                        ret = __event_invoke (event_pool, REINIT, handle);
 
                         gf_msg ("poll", GF_LOG_DEBUG, 0,
                                 LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
@@ -176,30 +209,14 @@ event_register_poll (struct event_pool* event_pool, void* translator,
                         reg_data->translator = translator;
                         reg_data->handle = handle;
                         reg_data->events = UV_DISCONNECT;
-                        reg_data->init = init;
+                        reg_data->handler = handler;
                         list_add_tail (&new_reg->list, &event_pool->regs.list);
 
-                        new_event = GF_CALLOC (1, sizeof (struct broker_data) +
-                                                    sizeof (struct event_node),
-                                               gf_common_mt_data_t);
-
-                        if (new_event == NULL) {
+                        ret = __event_invoke (event_pool, INIT, handle);
+                        if (ret != 0)
                                 GF_FREE (new_reg);
-                                ret = -1;
-                                goto unlock;
-                        }
-                        bd = (struct broker_data*)new_event->event;
-                        bd->type = INIT;
-                        bd->handle = handle;
-
-                        list_add_tail (&new_event->list,
-                                       &event_pool->events.list);
-
-                        uv_async_send (&event_pool->broker);
 
                         event_pool->changed = 1;
-
-			ret = 0;
                 }
         }
 unlock:
@@ -299,14 +316,6 @@ event_select_on_poll (struct event_pool* event_pool, void* handle, int poll_in,
                 bd->type = 0;
                 bd->handle = handle;
 
-                if (poll_in) {
-                        bd->type |= READ;
-                }
-
-                if (poll_out) {
-                        bd->type |= WRITE;
-                }
-
                 if (poll_in + poll_out > -2) {
                         //__event_handler(event_pool, new_event);
                         uv_async_send (&event_pool->broker);
@@ -341,57 +350,11 @@ __event_registered (struct event_pool* event_pool, uv_handle_t* handle)
 }
 
 static void
-__event_async_cb (uv_async_t* handle)
-{
-        int ret = 0;
-        struct event_pool* event_pool = NULL;
-        struct event_node *event_node = NULL, *n;
-        struct broker_data* ed = NULL;
-        struct reg_data* reg_data = NULL;
-        int toread = 0, towrite = 0;
-
-        event_pool = CONTAINER_OF (handle, struct event_pool, broker);
-
-        list_for_each_entry_safe (event_node, n, &event_pool->events.list, list)
-        {
-                ed = (struct broker_data*)&event_node->event;
-                reg_data = __event_registered (event_pool, ed->handle);
-                if (reg_data == NULL)
-                        gf_msg ("epoll", GF_LOG_DEBUG, 0,
-                                LG_MSG_START_EPOLL_THREAD_FAILED,
-                                "Not found the handle in reg table: %p",
-                                ed->handle);
-
-                if (ed->type & INIT) {
-                        if (reg_data->init)
-                                ret = reg_data->init (reg_data->loop,
-                                                      reg_data->translator);
-                        else {
-                                gf_msg ("epoll", GF_LOG_DEBUG, 0,
-                                        LG_MSG_START_EPOLL_THREAD_FAILED,
-                                        "The init handler is NULL: %p",
-                                        ed->handle);
-                        }
-                }
-                if (ed->type & READ) {
-                        toread = 1;
-                }
-                if (ed->type & WRITE) {
-                        towrite = 1;
-                }
-
-                list_del_init (&event_node->list);
-                GF_FREE (event_node);
-        }
-}
-
-static void
 __event_handler (struct event_pool* event_pool, struct event_node* event_node)
 {
-        int ret = 0;
         struct broker_data* ed = NULL;
         struct reg_data* reg_data = NULL;
-        int toread = 0, towrite = 0;
+	int ret = -1;
 
         ed = (struct broker_data*)&event_node->event;
         reg_data = __event_registered (event_pool, ed->handle);
@@ -400,22 +363,44 @@ __event_handler (struct event_pool* event_pool, struct event_node* event_node)
                         LG_MSG_START_EPOLL_THREAD_FAILED,
                         "Not found the handle in reg table: %p", ed->handle);
 
-        if (ed->type & INIT) {
-                if (reg_data->init)
-                        ret =
-                          reg_data->init (reg_data->loop, reg_data->translator);
-                else {
-                        gf_msg ("epoll", GF_LOG_DEBUG, 0,
-                                LG_MSG_START_EPOLL_THREAD_FAILED,
-                                "The init handler is NULL: %p", ed->handle);
-                }
+        if (reg_data->handler)
+                ret = reg_data->handler (reg_data->loop, reg_data->translator,
+                                         ed->type);
+        else {
+                gf_msg ("epoll", GF_LOG_DEBUG, 0,
+                        LG_MSG_START_EPOLL_THREAD_FAILED,
+                        "The handler is NULL: %p", ed->handle);
         }
-        if (ed->type & READ) {
-                toread = 1;
+}
+
+static void
+__event_handler_all (struct event_pool* event_pool)
+{
+        struct event_node *event_node = NULL, *n;
+
+        list_for_each_entry_safe (event_node, n, &event_pool->events.list, list)
+        {
+		__event_handler (event_pool, event_node);
+
+                list_del_init (&event_node->list);
+                GF_FREE (event_node);
         }
-        if (ed->type & WRITE) {
-                towrite = 1;
-        }
+}
+
+
+static void
+__event_async_cb (uv_async_t* handle)
+{
+        int ret = 0;
+        struct event_pool* event_pool = NULL;
+
+        event_pool = CONTAINER_OF (handle, struct event_pool, broker);
+
+	pthread_mutex_lock (&event_pool->mutex);
+	{
+		__event_handler_all (event_pool);
+	}
+	pthread_mutex_unlock (&event_pool->mutex);
 }
 
 static void*
