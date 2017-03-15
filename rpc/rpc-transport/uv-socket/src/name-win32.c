@@ -271,7 +271,7 @@ af_inet_client_get_remote_sockaddr (rpc_transport_t* this,
 
         /* TODO: gf_resolve is a blocking call. kick in some
            non blocking dns techniques */
-        ret = gf_resolve_ip6 (priv->handle.sock.loop, remote_host, remote_port,
+        ret = gf_resolve_ip6 (priv->handle->h.sock.loop, remote_host, remote_port,
                               sockaddr->sa_family, &this->dnscache, &addr_info);
         if (ret == -1) {
                 gf_log (this->name, GF_LOG_ERROR,
@@ -429,7 +429,7 @@ af_inet_server_get_local_sockaddr (rpc_transport_t* this, struct sockaddr* addr,
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
 
-        ret = uv_getaddrinfo (priv->handle.sock.loop, &addrinfo_req, NULL,
+        ret = uv_getaddrinfo (priv->handle->h.sock.loop, &addrinfo_req, NULL,
                               listen_host, service, &hints);
         if (ret != 0) {
                 gf_log (this->name, GF_LOG_ERROR,
@@ -617,7 +617,7 @@ get_transport_identifiers (rpc_transport_t* this)
                 case AF_INET:
                 case AF_INET6: {
                         ret = uv_getnameinfo (
-                          priv->handle.sock.loop, &name_req, NULL,
+                          priv->handle->h.sock.loop, &name_req, NULL,
                           (struct sockaddr*)&this->peerinfo.sockaddr, 0);
                         if (ret != 0) {
                                 gf_log (this->name, GF_LOG_ERROR,
@@ -630,7 +630,7 @@ get_transport_identifiers (rpc_transport_t* this)
                         }
 
                         ret = uv_getnameinfo (
-                          priv->handle.sock.loop, &name_req, NULL,
+                          priv->handle->h.sock.loop, &name_req, NULL,
                           (struct sockaddr*)&this->myinfo.sockaddr, 0);
                         if (ret != 0) {
                                 gf_log (this->name, GF_LOG_ERROR,

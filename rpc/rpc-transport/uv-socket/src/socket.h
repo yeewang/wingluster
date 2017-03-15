@@ -112,6 +112,17 @@ typedef enum {
         AR_SOCKET_CLOSE,
 } action_req_t;
 
+typedef struct  {
+	void *priv;
+
+	union {
+		uv_handle_t handle;
+		uv_stream_t stream;
+		uv_tcp_t sock;
+		uv_udp_t udp;
+	} h;
+} socket_handle_t;
+
 struct ioq
 {
         union
@@ -135,6 +146,7 @@ struct ioq
 struct bufq
 {
         struct list_head list;
+	struct iobuf* iobuf;
         struct iovec vector;
         size_t read;
 };
@@ -302,15 +314,7 @@ typedef struct
 	pthread_t th_id;
         void* translator;
 
-        union
-        {
-                uv_handle_t handle;
-                uv_stream_t stream;
-                uv_tcp_t sock;
-                uv_udp_t udp;
-        } handle;
-
-        gf_boolean_t handle_inited;
+        socket_handle_t* handle;
 
         uv_timer_t timer;
 
@@ -325,22 +329,8 @@ typedef struct
 	uv_mutex_t comm_lock;
         uv_cond_t comm_cond;
 
-        union
-        {
-                struct list_head action_req;
-                struct
-                {
-                        struct action_req* action_req_next;
-                        struct action_req* action_req_prev;
-                };
-        };
-
-        pthread_cond_t connect_cond;
-        pthread_cond_t listen_cond;
-
         /* -1 = not connected. 0 = in progress. 1 = connected */
         char connected;
-        char connection_req;
         char bio;
         char connect_finish_log;
         char submit_log;
