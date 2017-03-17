@@ -177,16 +177,16 @@ struct event_ops
 {
         struct event_pool* (*new) (int count, int eventthreadcount);
 
-        int (*event_register) (struct event_pool* event_pool, void* ctx,
-                               void* handle, event_handler_t init);
+        int (*event_register) (struct event_pool* event_pool, void* trans,
+                               event_handler_t init);
 
-        int (*event_select_on) (struct event_pool* event_pool, void* handle,
+        int (*event_select_on) (struct event_pool* event_pool, void* trans,
                                 int poll_in, int poll_out);
 
-        int (*event_unregister) (struct event_pool* event_pool, void* handle);
+        int (*event_unregister) (struct event_pool* event_pool, void* trans);
 
         int (*event_unregister_close) (struct event_pool* event_pool,
-                                       void* handle);
+                                       void* trans);
 
         int (*event_dispatch) (struct event_pool* event_pool);
 
@@ -197,12 +197,12 @@ struct event_ops
 };
 
 struct event_pool* event_pool_new (int count, int eventthreadcount);
-int event_select_on (struct event_pool* event_pool, void* handle, int poll_in,
+int event_select_on (struct event_pool* event_pool, void* trans, int poll_in,
                      int poll_out);
-int event_register (struct event_pool* event_pool, void* ctx, void* handle,
-                    event_handler_t init);
-int event_unregister (struct event_pool* event_pool, void* handle);
-int event_unregister_close (struct event_pool* event_pool, void* handle);
+int event_register (struct event_pool* event_pool, void* trans,
+                    event_handler_t handler);
+int event_unregister (struct event_pool* event_pool, void* trans);
+int event_unregister_close (struct event_pool* event_pool, void* trans);
 int event_dispatch (struct event_pool* event_pool);
 int event_reconfigure_threads (struct event_pool* event_pool, int value);
 int event_pool_destroy (struct event_pool* event_pool);

@@ -30,20 +30,19 @@ enum broker_type
 struct broker_data
 {
         int type;
-        void* handle;
+        void* trans;
 };
 
 struct reg_data
 {
         uv_loop_t* loop;
-        void* translator;
-        uv_handle_t* handle;
+        void* trans;
         int events;
         event_handler_t handler;
 };
 
 static int event_register_poll (struct event_pool* event_pool, void* translator,
-                                void* handle, event_handler_t handler);
+                                event_handler_t handler);
 
 static int event_unregister_poll (struct event_pool* event_pool, void* handle);
 
@@ -61,7 +60,7 @@ static void __event_handler_all (struct event_pool* event_pool);
 
 
 static struct reg_data*
-__event_getindex (struct event_pool* event_pool, void* handle)
+__event_getindex (struct event_pool* event_pool, void* trans)
 {
         struct reg_node* reg_node = NULL;
         struct reg_data* retval = NULL;
@@ -72,7 +71,7 @@ __event_getindex (struct event_pool* event_pool, void* handle)
         list_for_each_entry (reg_node, &event_pool->regs.list, list)
         {
                 item = (struct reg_data*)&reg_node->reg;
-                if (item->handle == handle) {
+                if (item->trans == trans) {
                         retval = item;
                         break;
                 }
@@ -82,7 +81,7 @@ out:
 }
 
 static int
-__event_invoke (struct event_pool* event_pool, int type, void* handle)
+__event_invoke (struct event_pool* event_pool, int type, void* trans)
 {
         struct event_node* new_event = NULL;
         struct broker_data* bd = NULL;
@@ -97,7 +96,7 @@ __event_invoke (struct event_pool* event_pool, int type, void* handle)
 	}
 	bd = (struct broker_data*)new_event->event;
 	bd->type = type;
-	bd->handle = handle;
+	bd->trans = trans;
 
 	list_add_tail (&new_event->list, &event_pool->events.list);
 
@@ -162,40 +161,31 @@ event_pool_new_poll (int count, int eventthreadcount)
 }
 
 static int
-event_register_poll (struct event_pool* event_pool, void* translator,
-                     void* handle, event_handler_t handler)
+event_register_poll (struct event_pool* event_pool, void* trans,
+                     event_handler_t handler)
 {
         uv_loop_t* loop = NULL;
         struct reg_node* new_reg = NULL;
         struct reg_data* reg_data = NULL;
         struct event_node* new_event = NULL;
-        struct broker_data* bd = NULL;
-        int need_clean = 0;
         int ret = -1;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
-        GF_VALIDATE_OR_GOTO ("event", translator, out);
-        GF_VALIDATE_OR_GOTO ("event", handle, out);
+        GF_VALIDATE_OR_GOTO ("event", trans, out);
 
         gf_msg ("poll", GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-                "Registering a new handle %p to the pool", handle);
+                "Registering a new trans (trans=%p) to the pool",
+                trans);
 
         pthread_mutex_lock (&event_pool->mutex);
         {
-                if (__event_getindex (event_pool, handle))
-                        need_clean = 1;
+                if (__event_getindex (event_pool, trans)) {
+			ret = __event_invoke (event_pool, REINIT, trans);
 
-                if (need_clean) {
-                        ret = __event_invoke (event_pool, REINIT, handle);
-
-                        gf_msg ("poll", GF_LOG_DEBUG, 0,
-                                LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-                                "Register handle %p to the pool is more times!",
-                                handle);
-                } else {
+        	} else {
                         loop = &event_pool->loop;
 
-                        new_reg = GF_CALLOC (1, sizeof (event_pool->regs) +
+                        new_reg = GF_CALLOC (1, sizeof (struct reg_node) +
                                                   sizeof (struct reg_data),
                                              gf_common_mt_reg);
 
@@ -206,13 +196,12 @@ event_register_poll (struct event_pool* event_pool, void* translator,
 
                         reg_data = (struct reg_data*)new_reg->reg;
                         reg_data->loop = loop;
-                        reg_data->translator = translator;
-                        reg_data->handle = handle;
-                        reg_data->events = UV_DISCONNECT;
+                        reg_data->trans = trans;
+                        reg_data->events = 0;
                         reg_data->handler = handler;
                         list_add_tail (&new_reg->list, &event_pool->regs.list);
 
-                        ret = __event_invoke (event_pool, INIT, handle);
+                        ret = __event_invoke (event_pool, INIT, trans);
                         if (ret != 0)
                                 GF_FREE (new_reg);
 
@@ -227,7 +216,7 @@ out:
 }
 
 static int
-event_unregister_poll (struct event_pool* event_pool, void* handle)
+event_unregister_poll (struct event_pool* event_pool, void* trans)
 {
         int ret = 0;
         struct reg_node* reg_node = NULL;
@@ -242,7 +231,7 @@ event_unregister_poll (struct event_pool* event_pool, void* handle)
                                           list)
                 {
                         reg_data = (struct reg_data*)&reg_node->reg;
-                        if (reg_data->handle == handle) {
+                        if (reg_data->trans == trans) {
                                 list_del (&reg_node->list);
                                 GF_FREE (reg_node);
 
@@ -258,28 +247,18 @@ out:
         return ret;
 }
 
-static void
-__close_handle (uv_handle_t* handle)
-{
-        struct event_pool* event_pool = NULL;
-
-        event_pool = CONTAINER_OF (handle->loop, struct event_pool, loop);
-}
-
 static int
-event_unregister_close_poll (struct event_pool* event_pool, void* handle)
+event_unregister_close_poll (struct event_pool* event_pool, void* trans)
 {
         int ret = -1;
 
-        uv_close (handle, __close_handle);
-
-        ret = event_unregister_poll (event_pool, handle);
+        ret = event_unregister_poll (event_pool, trans);
 
         return ret;
 }
 
 static int
-event_select_on_poll (struct event_pool* event_pool, void* handle, int poll_in,
+event_select_on_poll (struct event_pool* event_pool, void* trans, int poll_in,
                       int poll_out)
 {
         int ret = -1;
@@ -291,38 +270,17 @@ event_select_on_poll (struct event_pool* event_pool, void* handle, int poll_in,
 
         pthread_mutex_lock (&event_pool->mutex);
         {
-                slot = __event_getindex (event_pool, handle);
-
+                slot = __event_getindex (event_pool, trans);
                 if (slot == NULL) {
                         gf_msg ("poll", GF_LOG_ERROR, 0, LG_MSG_INDEX_NOT_FOUND,
-                                "index not found for handle=%p", handle);
+                                "trans not found for trans=%p", trans);
                         errno = ENOENT;
                         goto unlock;
                 }
 
                 ret = 0;
 
-                new_event = GF_CALLOC (1, sizeof (struct broker_data) +
-                                            sizeof (struct event_node),
-                                       gf_common_mt_data_t);
-
-                if (new_event == NULL) {
-                        errno = ENOMEM;
-                        ret = -1;
-                        goto unlock;
-                }
-
-                bd = (struct broker_data*)new_event->event;
-                bd->type = 0;
-                bd->handle = handle;
-
-                if (poll_in + poll_out > -2) {
-                        //__event_handler(event_pool, new_event);
-                        uv_async_send (&event_pool->broker);
-                        event_pool->changed = 1;
-                }
-
-                // GF_FREE (new_event);
+		__event_invoke (event_pool, 0, trans);
         }
 unlock:
         pthread_mutex_unlock (&event_pool->mutex);
@@ -332,7 +290,7 @@ out:
 }
 
 static struct reg_data*
-__event_registered (struct event_pool* event_pool, uv_handle_t* handle)
+__event_registered (struct event_pool* event_pool, void* trans)
 {
         struct reg_node* reg_node = NULL;
         struct reg_data* reg_data = NULL;
@@ -340,7 +298,7 @@ __event_registered (struct event_pool* event_pool, uv_handle_t* handle)
         list_for_each_entry (reg_node, &event_pool->regs.list, list)
         {
                 reg_data = (struct reg_data*)reg_node->reg;
-                if (reg_data->handle == handle) {
+                if (reg_data->trans == trans) {
                         return reg_data;
                         break;
                 }
@@ -357,19 +315,21 @@ __event_handler (struct event_pool* event_pool, struct event_node* event_node)
 	int ret = -1;
 
         ed = (struct broker_data*)&event_node->event;
-        reg_data = __event_registered (event_pool, ed->handle);
-        if (reg_data == NULL)
+        reg_data = __event_registered (event_pool, ed->trans);
+        if (reg_data == NULL) {
                 gf_msg ("epoll", GF_LOG_DEBUG, 0,
                         LG_MSG_START_EPOLL_THREAD_FAILED,
-                        "Not found the handle in reg table: %p", ed->handle);
+                        "Not found the handle in reg table: %p", ed->trans);
+		return;
+	}
 
         if (reg_data->handler)
-                ret = reg_data->handler (reg_data->loop, reg_data->translator,
+                ret = reg_data->handler (reg_data->loop, reg_data->trans,
                                          ed->type);
         else {
                 gf_msg ("epoll", GF_LOG_DEBUG, 0,
                         LG_MSG_START_EPOLL_THREAD_FAILED,
-                        "The handler is NULL: %p", ed->handle);
+                        "The handler is NULL: %p", ed->trans);
         }
 }
 

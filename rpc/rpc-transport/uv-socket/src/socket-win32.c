@@ -208,6 +208,9 @@ static inline size_t writeq_get_size (struct write_q* write_q);
 
 static void __socket_write_req (rpc_transport_t* this);
 
+static void
+async_rpc_transport_notify (rpc_transport_t *this, int event, void *data);
+
 
 static socket_handle_t *alloc_handle(socket_private_t* priv)
 {
@@ -755,17 +758,26 @@ __socket_readv (rpc_transport_t* this, struct iovec* vector, int count,
 }
 
 static void
-__after_shutdown_cb (uv_shutdown_t* req, int status)
+__socket_close_cb_001 (uv_handle_t *handle)
 {
-        struct req_buf* req_buf = NULL;
-        rpc_transport_t* this = NULL;
-        socket_private_t* priv = NULL;
 	socket_handle_t* h = NULL;
 
-        req_buf = CONTAINER_OF (req, struct req_buf, req);
-        priv = req_buf->priv;
-        this = priv->translator;
-	h = req->data;
+	h = CONTAINER_OF (handle, socket_handle_t, h);
+
+	free_handle (h);
+}
+
+
+static void
+__socket_close_cb (uv_handle_t *handle)
+{
+	socket_handle_t* h = NULL;
+	socket_private_t* priv = NULL;
+	rpc_transport_t* this = NULL;
+
+	h = CONTAINER_OF (handle, socket_handle_t, h);
+	priv = h->priv;
+	this = priv->translator;
 
         if (priv->own_thread) {
                 /*
@@ -778,9 +790,37 @@ __after_shutdown_cb (uv_shutdown_t* req, int status)
                 ssl_teardown_connection (priv);
         }
 
-        uv_close ((uv_handle_t *)&h->h.handle, NULL);
+	gf_log (this->name, GF_LOG_DEBUG, "close() returned: priv=%p, sock=%p.",
+		priv, &priv->handle->h);
 
 	free_handle (h);
+}
+
+static void
+__after_shutdown_cb (uv_shutdown_t* req, int status)
+{
+        struct req_buf* req_buf = NULL;
+        rpc_transport_t* this = NULL;
+        socket_private_t* priv = NULL;
+	socket_handle_t* h = NULL;
+
+        req_buf = CONTAINER_OF (req, struct req_buf, req);
+        priv = req_buf->priv;
+        this = priv->translator;
+	h = req_buf->data;
+
+        if (priv->own_thread) {
+                /*
+                 * Without this, reconnect (= disconnect + connect)
+                 * won't work except by accident.
+                 */
+                gf_log (this->name, GF_LOG_TRACE, "OT_PLEASE_DIE on %p", this);
+                priv->ot_state = OT_PLEASE_DIE;
+        } else if (priv->use_ssl) {
+                ssl_teardown_connection (priv);
+        }
+
+        uv_close (&h->h.handle, __socket_close_cb);
 
         gf_log (this->name, GF_LOG_DEBUG, "close() returned: priv=%p.", priv);
 
@@ -793,6 +833,7 @@ __socket_shutdown (rpc_transport_t* this)
         int ret = -1;
         socket_private_t* priv = this->private;
         struct req_buf* req_buf = NULL;
+	socket_handle_t* handle = NULL;
 
         req_buf = GF_CALLOC (1, sizeof (struct req_buf), gf_sock_mt_req);
         if (req_buf == NULL) {
@@ -802,21 +843,24 @@ __socket_shutdown (rpc_transport_t* this)
                 return -1;
         }
 
-        req_buf->priv = priv;
-        req_buf->data = NULL;
-	req_buf->shutdown_req.data = &priv->handle;
+	handle = priv->handle;
 
-        ret = uv_shutdown (&req_buf->shutdown_req, &priv->handle->h.stream,
+        req_buf->priv = priv;
+        req_buf->data = handle;
+
+	uv_close (&handle->h.handle, __socket_close_cb);
+	ret = 0;
+
+#ifdef NEVER
+        ret = uv_shutdown (&req_buf->shutdown_req, &handle->h.stream,
                            __after_shutdown_cb);
+#endif /* NEVER */
         if (ret) {
                 /* its already disconnected.. no need to understand
                    why it failed to shutdown in normal cases */
                 gf_log (this->name, GF_LOG_DEBUG, "shutdown() returned %d. %s",
                         ret, strerror (errno));
         }
-
-	priv->handle = NULL;
-        priv->connected = -1;
 
         return ret;
 }
@@ -832,13 +876,22 @@ __socket_disconnect (rpc_transport_t* this)
 
         priv = this->private;
 
-        gf_log (this->name, GF_LOG_ERROR,
-                "disconnecting %p, state=%u gen=%u sock=%p", this,
-                priv->ot_state, priv->ot_gen, &priv->handle->h.sock);
+        gf_log (this->name, GF_LOG_DEBUG,
+                "disconnecting %d, state=%u gen=%u priv=%p, sock=%p, tid=%d",
+                this, priv->ot_state, priv->ot_gen, priv, priv->handle,
+                pthread_self());
 
         uv_read_stop (&priv->handle->h.stream);
 
         ret = __socket_shutdown (this);
+
+	priv->handle = NULL;
+	priv->connected = -1;
+
+	gf_log (this->name, GF_LOG_DEBUG,
+		"disconnectingwwwwwwwww %d, state=%u gen=%u priv=%p, tid=%d", this,
+		priv->ot_state, priv->ot_gen, priv,
+		pthread_self());
 
 out:
         return ret;
@@ -2161,9 +2214,6 @@ out:
         return ret;
 }
 
-static int times1 = 0, times2 = 0, times3 = 0;
-
-
 static int
 socket_event_poll_in (rpc_transport_t* this)
 {
@@ -2171,17 +2221,11 @@ socket_event_poll_in (rpc_transport_t* this)
         rpc_transport_pollin_t* pollin = NULL;
         socket_private_t* priv = this->private;
 
-	times1++;
-
         ret = socket_proto_state_machine (this, &pollin);
         if (pollin) {
-		times2++;
-
 		priv->ot_state = OT_CALLBACK;
                 ret = rpc_transport_notify (this, RPC_TRANSPORT_MSG_RECEIVED,
                                             pollin);
-		times3++;
-
 
                 if (priv->ot_state == OT_CALLBACK) {
                         priv->ot_state = OT_RUNNING;
@@ -2266,7 +2310,7 @@ out:
 }
 
 static void
-___rpc_transport_notify__001 (rpc_transport_t *this, int event, void *data)
+async_rpc_transport_notify (rpc_transport_t *this, int event, void *data)
 {
 	socket_private_t *priv = NULL;
         struct event_q* event_q = NULL;
@@ -2538,29 +2582,20 @@ socket_server_event_handler (rpc_transport_t* this)
                         new_priv->is_server = _gf_true;
                         rpc_transport_ref (new_trans);
 
-                        if (new_priv->own_thread) {
-#ifdef NEVER
-                                ret = socket_spawn (new_trans);
-                                if (ret) {
-                                        gf_log (this->name, GF_LOG_ERROR,
-                                                "could not spawn thread");
-                                }
-#endif /* NEVER */
-                        } else {
-                                ret = event_register (ctx->event_pool, this,
-                                                      &priv->handle,
-                                                      __socket_connect_handler);
-                                if (ret != 0) {
-                                        gf_log (this->name, GF_LOG_ERROR,
-                                                "failed to register the socket "
-                                                "with event");
+		}
+		pthread_mutex_unlock (&new_priv->lock);
 
-                                        if (ret > 0)
-                                                ret = 0;
-                                }
-                        }
+                ret = event_register (ctx->event_pool, this,
+                                      __socket_connect_handler);
+                if (ret != 0) {
+                        gf_log (this->name, GF_LOG_ERROR,
+                                "failed to register the socket "
+                                "with event");
+
+                        if (ret > 0)
+                                ret = 0;
                 }
-                pthread_mutex_unlock (&new_priv->lock);
+
                 if (ret == -1) {
                         __socket_shutdown (new_trans);
                         rpc_transport_unref (new_trans);
@@ -2568,7 +2603,7 @@ socket_server_event_handler (rpc_transport_t* this)
                 }
 
                 if (!priv->own_thread) {
-                        rpc_transport_notify (this, RPC_TRANSPORT_ACCEPT,
+                        async_rpc_transport_notify (this, RPC_TRANSPORT_ACCEPT,
                                                     new_trans);
                 }
         }
@@ -2748,14 +2783,14 @@ __write_next_writeq (rpc_transport_t* this)
                                 write_q->count, &socket_write_cb);
                 if (ret) {
                         gf_log (this->name, GF_LOG_ERROR,
-                                "failure on writing socket:%s.",
-                                uv_strerror (ret));
+                                "failure on writing socket: priv=%p, %s.",
+                                priv, uv_strerror (ret));
 			goto out;
                 }
 
                 list_del_init (&write_q->list);
 	} else
-		rpc_transport_notify (this, RPC_TRANSPORT_MSG_SENT, NULL);
+		async_rpc_transport_notify (this, RPC_TRANSPORT_MSG_SENT, NULL);
 out:
 	return ret;
 }
@@ -2819,14 +2854,14 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 		size_t dd = bufq_get_size (&priv->read_q);
                 list_add_tail (&bufq->list, &priv->read_q.list);
 
-		//socket_event_poll_in (this);
+		socket_event_poll_in (this);
 
 
 		gf_log ("", GF_LOG_ERROR,
-                "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm:nread=%d. orign=%d.readf=%d,%d,%d,%d,%d",
-                nread, dd, bufq_get_size (&priv->read_q), pthread_self(), times1, times2, times3);
+                "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm:nread=%d. orign=%d.readf=%d,%d",
+                nread, dd, bufq_get_size (&priv->read_q), pthread_self());
 
-		uv_cond_broadcast (&priv->comm_cond);
+		//uv_cond_broadcast (&priv->comm_cond);
         }
         uv_mutex_unlock (&priv->comm_lock);
 }
@@ -2986,7 +3021,7 @@ __socket_handle_init (uv_loop_t* loop, void* translator)
 
         this = translator;
         priv = this->private;
-        sock = alloc_handle (priv);
+        sock = priv->handle;
 
 	if (sock == NULL)
 		return -1;
@@ -3062,7 +3097,7 @@ __socket_handle_init (uv_loop_t* loop, void* translator)
                   this->options, "transport.socket.ignore-enoent", _gf_false);
 
 #ifdef ENABLE_BIND
-                ret = uv_tcp_bind (&priv->handle->h.sock,
+                ret = uv_tcp_bind (&sock->h.sock,
                                    (struct sockaddr*)&this->myinfo.sockaddr, 0);
                 if (ret != 0) {
                         gf_log (this->name, GF_LOG_WARNING,
@@ -3191,6 +3226,10 @@ __socket_connect_handler (uv_loop_t* loop, void* translator, int action)
 	this = translator;
 	priv = this->private;
 
+	gf_log (this->name, GF_LOG_ERROR,
+		" ssssssssssssssssssssss(priv=%p, %p)",
+		priv, priv->handle);
+
 	pthread_mutex_lock (&priv->lock);
 	{
 	        switch (action) {
@@ -3203,6 +3242,10 @@ __socket_connect_handler (uv_loop_t* loop, void* translator, int action)
 	        }
 	}
 	pthread_mutex_unlock (&priv->lock);
+
+	gf_log (this->name, GF_LOG_ERROR,
+		" FFFFFFFFFFFFFFFFFFFFF (priv=%p, %p)",
+		priv, priv->handle);
 
         return ret;
 }
@@ -3323,16 +3366,13 @@ socket_connect (rpc_transport_t* this, int port)
         char* cname = NULL;
         int sock_opt = 0;
         socklen_t sock_opt_size = 0;
+	gf_boolean_t reg = _gf_false;
 
         GF_VALIDATE_OR_GOTO ("socket", this, err);
         GF_VALIDATE_OR_GOTO ("socket", this->private, err);
 
         priv = this->private;
         ctx = this->ctx;
-
-	gf_log (this->name, GF_LOG_ERROR,
-		"socket_connect %p, state=%u gen=%u sock=%p, connected=%d", this,
-		priv->ot_state, priv->ot_gen, &priv->handle->h.sock, priv->connected);
 
         if (!priv) {
                 gf_log_callingfn (
@@ -3346,16 +3386,22 @@ socket_connect (rpc_transport_t* this, int port)
                 /* uv is not thread safety, but I have use it in here. */
                 if (priv->handle) {
                         gf_log_callingfn (this->name, GF_LOG_TRACE,
-                                          "connect () called on transport "
-                                          "already connected");
+                                          "connect (priv=%p) called on transport "
+                                          "already connected", priv);
                         errno = EINPROGRESS;
                         ret = 0;
                         goto unlock;
                 }
 
+		priv->handle = alloc_handle (priv);
+		if (priv->handle == NULL) {
+			ret = -1;
+			goto unlock;
+		}
+
                 gf_log (this->name, GF_LOG_TRACE,
                         "connecting %p, state=%u gen=%u sock=%p", this,
-                        priv->ot_state, priv->ot_gen, &priv->handle->h.sock);
+                        priv->ot_state, priv->ot_gen, &priv->handle->h);
 
                 priv->port = port;
 
@@ -3367,18 +3413,16 @@ socket_connect (rpc_transport_t* this, int port)
                 priv->is_server = _gf_false;
                 rpc_transport_ref (this);
                 refd = _gf_true;
-
-                ret = event_register (ctx->event_pool, this, &priv->handle,
-                                      __socket_connect_handler);
-                if (ret > 0)
-                        ret = 0;
+		reg = _gf_true;
         }
 unlock:
         pthread_mutex_unlock (&priv->lock);
 
-	gf_log (this->name, GF_LOG_DEBUG,
-		"socket_connect2 %p, state=%u gen=%u sock=%p", this,
-		priv->ot_state, priv->ot_gen, &priv->handle->h.sock);
+	if (reg) {
+	        ret = event_register (ctx->event_pool, this, __socket_connect_handler);
+	        if (ret > 0)
+	                ret = 0;
+	}
 
 err:
         /* if sock != -1, then cleanup is done from the event handler */
@@ -3444,22 +3488,22 @@ socket_listen (rpc_transport_t* this)
                 myinfo->sockaddr_len = sockaddr_len;
 
                 rpc_transport_ref (this);
-
-                ret = event_register (ctx->event_pool, this, &priv->handle,
-                                      __socket_listen_handler);
-
-                if (ret != 0) {
-                        gf_log (this->name, GF_LOG_WARNING,
-                                "could not register socket %p with events",
-                                &priv->handle->h.sock);
-                        if (ret > 0)
-                                ret = 0;
-
-                        goto unlock;
-                }
         }
 unlock:
         pthread_mutex_unlock (&priv->lock);
+
+        ret = event_register (ctx->event_pool, this,
+                              __socket_listen_handler);
+
+        if (ret != 0) {
+                gf_log (this->name, GF_LOG_WARNING,
+                        "could not register socket %p with events",
+                        &priv->handle->h.sock);
+                if (ret > 0)
+                        ret = 0;
+
+                goto unlock;
+        }
 
 out:
         return ret;
@@ -3873,6 +3917,7 @@ socket_init (rpc_transport_t* this)
         char* dh_param = DEFAULT_DH_PARAM;
         char* ec_curve = DEFAULT_EC_CURVE;
         char* crl_path = NULL;
+	pthread_mutexattr_t attr;
 
         if (this->private) {
                 gf_log_callingfn (this->name, GF_LOG_ERROR,
@@ -3892,6 +3937,8 @@ socket_init (rpc_transport_t* this)
                 return -1;
         }
 
+	//pthread_mutexattr_init(&attr);
+	//pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
         pthread_mutex_init (&priv->lock, NULL);
 	uv_mutex_init (&priv->comm_lock);
 	uv_cond_init (&priv->comm_cond);
