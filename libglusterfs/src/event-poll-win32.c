@@ -59,6 +59,84 @@ static void __event_handler (struct event_pool* event_pool,
 static void __event_handler_all (struct event_pool* event_pool);
 
 
+static void
+__prepare_cb (uv_prepare_t* handle)
+{
+        struct event_pool* event_pool = NULL;
+
+        event_pool = CONTAINER_OF (handle, struct event_pool, prepare);
+
+	if (event_pool->prepare_cb_called++)
+    		return;
+
+	uv_mutex_unlock (&event_pool->mutex);
+}
+
+static int
+__init_async_handle (struct event_pool* event_pool)
+{
+	uv_async_t* handle = NULL;
+	int ret = -1;
+
+	for (int i = 0;
+	     i < sizeof (event_pool->broker) /
+	     	sizeof (event_pool->broker[0]);
+	     i++) {
+		ret = uv_async_init (&event_pool->loop, &event_pool->broker[i],
+				     __event_async_cb);
+		if (ret != 0) {
+		     gf_msg ("epoll", GF_LOG_INFO, 0,
+			     LG_MSG_EXITED_EPOLL_THREAD,
+			     "Init the No.%d handle failed with ret %s",
+			     i, uv_strerror(ret));
+		     break;
+		}
+
+		event_pool->broker[i].data = event_pool;
+		event_pool->broker_state[i] = 0;
+	}
+
+	return ret;
+}
+
+static int
+__set_free_async_handle (struct event_pool* event_pool, uv_async_t* handle)
+{
+	int ret = -1;
+
+	for (int i = 0;
+	     i < sizeof (event_pool->broker) /
+	     	sizeof (event_pool->broker[0]);
+	     i++) {
+		if (event_pool->broker + i == handle) {
+			event_pool->broker_state[i] = 0;
+			ret = 0;
+			break;
+		}
+	}
+
+        return ret;
+}
+
+static uv_async_t *
+__get_free_async_handle (struct event_pool* event_pool)
+{
+	uv_async_t* handle = NULL;
+
+	for (int i = 0;
+	     i < sizeof (event_pool->broker) /
+	     	sizeof (event_pool->broker[0]);
+	     i++) {
+		if (event_pool->broker_state[i] == 0) {
+			handle = &event_pool->broker[i];
+			event_pool->broker_state[i] = 1;
+			break;
+		}
+	}
+
+	return handle;
+}
+
 static struct reg_data*
 __event_getindex (struct event_pool* event_pool, void* trans)
 {
@@ -68,7 +146,7 @@ __event_getindex (struct event_pool* event_pool, void* trans)
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        list_for_each_entry (reg_node, &event_pool->regs.list, list)
+        list_for_each_entry (reg_node, &event_pool->reg_list, list)
         {
                 item = (struct reg_data*)&reg_node->reg;
                 if (item->trans == trans) {
@@ -85,10 +163,11 @@ __event_invoke (struct event_pool* event_pool, int type, void* trans)
 {
         struct event_node* new_event = NULL;
         struct broker_data* bd = NULL;
+	uv_async_t* handle = NULL;
         int ret = -1;
 
-	new_event = GF_CALLOC (1, sizeof (struct broker_data) +
-				    sizeof (struct event_node),
+	new_event = GF_CALLOC (1, sizeof (struct event_node) +
+				sizeof (struct broker_data),
 			       gf_common_mt_data_t);
 	if (new_event == NULL) {
 		ret = -1;
@@ -98,15 +177,17 @@ __event_invoke (struct event_pool* event_pool, int type, void* trans)
 	bd->type = type;
 	bd->trans = trans;
 
-	list_add_tail (&new_event->list, &event_pool->events.list);
+	list_add_tail (&new_event->list, &event_pool->event_list);
 
-	if (event_pool->poller == pthread_self()) {
-		__event_handler_all (event_pool);
-		ret = 0;
-	}
-	else {
-	        ret = uv_async_send (&event_pool->broker);
-	}
+	do {
+		handle = __get_free_async_handle (event_pool);
+	} while (handle == NULL);
+
+        ret = uv_async_send (handle);
+
+	gf_msg ("poll", GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+			"ddddddddddddddddddddddddd (trans=%p, ret=%d) to the pool",
+			trans, ret);
 
 fail:
         return ret;
@@ -129,12 +210,9 @@ event_pool_new_poll (int count, int eventthreadcount)
         if (!event_pool)
                 return NULL;
 
-        INIT_LIST_HEAD (&event_pool->regs);
+        INIT_LIST_HEAD (&event_pool->reg_list);
 
-        INIT_LIST_HEAD (&event_pool->events);
-
-        pthread_mutex_init (&event_pool->mutex, NULL);
-        pthread_cond_init (&event_pool->cond, NULL);
+        INIT_LIST_HEAD (&event_pool->event_list);
 
         ret =
           pthread_create (&t_id, NULL, event_dispatch_win32_worker, event_pool);
@@ -177,7 +255,7 @@ event_register_poll (struct event_pool* event_pool, void* trans,
                 "Registering a new trans (trans=%p) to the pool",
                 trans);
 
-        pthread_mutex_lock (&event_pool->mutex);
+        uv_mutex_lock (&event_pool->mutex);
         {
                 if (__event_getindex (event_pool, trans)) {
 			ret = __event_invoke (event_pool, REINIT, trans);
@@ -199,7 +277,7 @@ event_register_poll (struct event_pool* event_pool, void* trans,
                         reg_data->trans = trans;
                         reg_data->events = 0;
                         reg_data->handler = handler;
-                        list_add_tail (&new_reg->list, &event_pool->regs.list);
+                        list_add_tail (&new_reg->list, &event_pool->reg_list);
 
                         ret = __event_invoke (event_pool, INIT, trans);
                         if (ret != 0)
@@ -209,7 +287,7 @@ event_register_poll (struct event_pool* event_pool, void* trans,
                 }
         }
 unlock:
-        pthread_mutex_unlock (&event_pool->mutex);
+        uv_mutex_unlock (&event_pool->mutex);
 
 out:
         return ret;
@@ -225,9 +303,9 @@ event_unregister_poll (struct event_pool* event_pool, void* trans)
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        pthread_mutex_lock (&event_pool->mutex);
+        uv_mutex_lock (&event_pool->mutex);
         {
-                list_for_each_entry_safe (reg_node, n, &event_pool->regs.list,
+                list_for_each_entry_safe (reg_node, n, &event_pool->reg_list,
                                           list)
                 {
                         reg_data = (struct reg_data*)&reg_node->reg;
@@ -241,7 +319,7 @@ event_unregister_poll (struct event_pool* event_pool, void* trans)
                 }
         }
 unlock:
-        pthread_mutex_unlock (&event_pool->mutex);
+        uv_mutex_unlock (&event_pool->mutex);
 
 out:
         return ret;
@@ -268,7 +346,7 @@ event_select_on_poll (struct event_pool* event_pool, void* trans, int poll_in,
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        pthread_mutex_lock (&event_pool->mutex);
+        uv_mutex_lock (&event_pool->mutex);
         {
                 slot = __event_getindex (event_pool, trans);
                 if (slot == NULL) {
@@ -283,7 +361,7 @@ event_select_on_poll (struct event_pool* event_pool, void* trans, int poll_in,
 		__event_invoke (event_pool, 0, trans);
         }
 unlock:
-        pthread_mutex_unlock (&event_pool->mutex);
+        uv_mutex_unlock (&event_pool->mutex);
 
 out:
         return ret;
@@ -295,7 +373,7 @@ __event_registered (struct event_pool* event_pool, void* trans)
         struct reg_node* reg_node = NULL;
         struct reg_data* reg_data = NULL;
 
-        list_for_each_entry (reg_node, &event_pool->regs.list, list)
+        list_for_each_entry (reg_node, &event_pool->reg_list, list)
         {
                 reg_data = (struct reg_data*)reg_node->reg;
                 if (reg_data->trans == trans) {
@@ -336,14 +414,15 @@ __event_handler (struct event_pool* event_pool, struct event_node* event_node)
 static void
 __event_handler_all (struct event_pool* event_pool)
 {
-        struct event_node *event_node = NULL, *n;
+        struct event_node *node = NULL, *n;
 
-        list_for_each_entry_safe (event_node, n, &event_pool->events.list, list)
+        list_for_each_entry_safe (node, n, &event_pool->event_list, list)
         {
-		__event_handler (event_pool, event_node);
+                list_del_init (&node->list);
 
-                list_del_init (&event_node->list);
-                GF_FREE (event_node);
+		__event_handler (event_pool, node);
+
+                GF_FREE (node);
         }
 }
 
@@ -354,13 +433,22 @@ __event_async_cb (uv_async_t* handle)
         int ret = 0;
         struct event_pool* event_pool = NULL;
 
-        event_pool = CONTAINER_OF (handle, struct event_pool, broker);
+        event_pool = handle->data;
+	gf_msg ("poll", GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+				"hhhhhhhhhhhhhhhhhhhh (event_pool=%p) to the pool",
+				event_pool);
 
-	pthread_mutex_lock (&event_pool->mutex);
+	uv_mutex_lock (&event_pool->mutex);
 	{
 		__event_handler_all (event_pool);
+
+		__set_free_async_handle (event_pool, handle);
 	}
-	pthread_mutex_unlock (&event_pool->mutex);
+	uv_mutex_unlock (&event_pool->mutex);
+
+		gf_msg ("poll", GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+				"iiiiiiiiiiiiiiiiiiii (event_pool=%p) to the pool",
+				event_pool);
 }
 
 static void*
@@ -373,32 +461,61 @@ event_dispatch_win32_worker (void* data)
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        for (;;) {
-                ret = uv_loop_init (&event_pool->loop);
-                if (ret != 0) {
-                        gf_msg ("epoll", GF_LOG_INFO, 0,
-                                LG_MSG_EXITED_EPOLL_THREAD, "Exited "
-                                                            "loop with ret %d",
-                                ret);
-                        goto out;
-                }
+	event_pool->prepare_cb_called = 0;
 
-                ret = uv_async_init (&event_pool->loop, &event_pool->broker,
-                                     __event_async_cb);
-                if (ret != 0) {
-                        gf_msg ("epoll", GF_LOG_INFO, 0,
-                                LG_MSG_EXITED_EPOLL_THREAD,
-                                "Init "
-                                "broker failed with ret %d",
-                                ret);
-                        goto out;
-                }
+	ret = uv_loop_init (&event_pool->loop);
+        if (ret != 0) {
+                gf_msg ("epoll", GF_LOG_INFO, 0,
+                        LG_MSG_EXITED_EPOLL_THREAD, "Exited loop with ret %d",
+                        ret);
+                goto out;
+        }
 
-                if (uv_run (&event_pool->loop, UV_RUN_DEFAULT)) {
-                        break;
-                }
+	ret = uv_mutex_init (&event_pool->mutex);
+        if (ret != 0) {
+                gf_msg ("epoll", GF_LOG_INFO, 0,
+                        LG_MSG_EXITED_EPOLL_THREAD, "Exited loop with ret %d",
+                        ret);
+                goto out;
+        }
 
-                uv_loop_close (&event_pool->loop);
+	uv_mutex_lock (&event_pool->mutex);
+
+	ret = uv_cond_init (&event_pool->cond);
+        if (ret != 0) {
+                gf_msg ("epoll", GF_LOG_INFO, 0,
+                        LG_MSG_EXITED_EPOLL_THREAD, "Exited loop with ret %d",
+                        ret);
+                goto out;
+        }
+
+	ret = uv_prepare_init (&event_pool->loop, &event_pool->prepare);
+        if (ret != 0) {
+                gf_msg ("epoll", GF_LOG_INFO, 0,
+                        LG_MSG_EXITED_EPOLL_THREAD, "Exited loop with ret %d",
+                        ret);
+                goto out;
+        }
+
+  	ret = uv_prepare_start (&event_pool->prepare, __prepare_cb);
+        if (ret != 0) {
+                gf_msg ("epoll", GF_LOG_INFO, 0,
+                        LG_MSG_EXITED_EPOLL_THREAD, "Exited loop with ret %d",
+                        ret);
+                goto out;
+        }
+
+        ret = __init_async_handle (event_pool);
+        if (ret != 0) {
+                gf_msg ("epoll", GF_LOG_INFO, 0,
+                        LG_MSG_EXITED_EPOLL_THREAD,
+                        "Init broker failed with ret %d",
+                        ret);
+                goto out;
+        }
+
+        if (uv_run (&event_pool->loop, UV_RUN_DEFAULT)) {
+                goto out;;
         }
 
 out:
@@ -427,6 +544,12 @@ event_reconfigure_threads_poll (struct event_pool* event_pool, int value)
         return 0;
 }
 
+static void
+__close_cb(uv_handle_t* handle)
+{
+
+}
+
 /* This function is the destructor for the event_pool data structure
  * Should be called only after poller_threads_destroy() is called,
  * else will lead to crashes.
@@ -434,20 +557,27 @@ event_reconfigure_threads_poll (struct event_pool* event_pool, int value)
 static int
 event_pool_destroy_poll (struct event_pool* event_pool)
 {
-        struct reg_node* slot = &event_pool->regs;
+        struct reg_node* slot = &event_pool->reg_list;
         struct reg_node* n;
         struct reg_data* item = NULL;
         int ret = 0;
 
-        uv_close ((uv_handle_t*)&event_pool->broker, NULL);
+	uv_mutex_lock (&event_pool->mutex);
 
-        ret = uv_loop_close (&event_pool->loop);
+	ret = uv_loop_close (&event_pool->loop);
 
-        list_for_each_entry_safe (slot, n, &event_pool->regs.list, list)
+        list_for_each_entry_safe (slot, n, &event_pool->reg_list, list)
         {
                 list_del_init (&slot->list);
                 GF_FREE (slot);
         }
+
+
+        uv_close ((uv_handle_t*)&event_pool->broker, __close_cb);
+
+	uv_close ((uv_handle_t*)&event_pool->prepare, __close_cb);
+
+	uv_mutex_unlock (&event_pool->mutex);
 
         GF_FREE (event_pool);
 

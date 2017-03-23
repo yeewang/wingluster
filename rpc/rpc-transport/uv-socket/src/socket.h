@@ -113,6 +113,7 @@ typedef enum {
 } action_req_t;
 
 typedef struct  {
+	int   inited;
 	void *priv;
 
 	union {
@@ -165,27 +166,19 @@ struct req_buf
         void* data;
         union
         {
+		uv_req_t req;
                 uv_getnameinfo_t nameinfo_req;
                 uv_getaddrinfo_t addrinfo_req;
                 uv_connect_t connect_req;
                 uv_shutdown_t shutdown_req;
-                uv_req_t req;
                 uv_write_t write_req;
+		uv_work_t work_req;
         };
 };
 
 struct action_req
 {
-        union
-        {
-                struct list_head list;
-                struct
-                {
-                        struct action_req* next;
-                        struct action_req* prev;
-                };
-        };
-
+        struct list_head list;
         pthread_mutex_t mutex;
         pthread_cond_t cond;
         action_req_t type;
@@ -195,7 +188,7 @@ struct action_req
 
 struct event_q
 {
-        struct list_head list;
+	struct list_head list;
         int event;
 	void *data;
 };
@@ -322,12 +315,15 @@ typedef struct
         conn_state_t wrstate;
         ssize_t result;
 
-        struct bufq read_q;
-        struct write_q write_q;
-        struct event_q event_q;
+        struct list_head read_q;
+	struct list_head write_q;
+        struct list_head event_q;
+	struct iobref* read_iobref;
 
 	uv_mutex_t comm_lock;
         uv_cond_t comm_cond;
+
+	uv_prepare_t prepare;
 
         /* -1 = not connected. 0 = in progress. 1 = connected */
         char connected;

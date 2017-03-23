@@ -81,29 +81,26 @@ struct event_pool
 
 struct reg_node
 {
-        union
-        {
-                struct list_head list;
-                struct
-                {
-                        struct reg_node* next;
-                        struct reg_node* prev;
-                };
-        };
+	union {
+        	struct list_head list;
+		struct {
+			struct reg_node *next;
+			struct reg_node *prev;
+		};
+	};
+
         uint8_t reg[];
 };
 
 struct event_node
 {
-        union
-        {
-                struct list_head list;
-                struct
-                {
-                        struct event_node* next;
-                        struct event_node* prev;
-                };
-        };
+	union {
+        	struct list_head list;
+		struct {
+			struct event_node *next;
+			struct event_node *prev;
+		};
+	};
         uint8_t event[];
 };
 
@@ -112,18 +109,22 @@ struct event_pool
         struct event_ops* ops;
 
         uv_loop_t loop;
-        uv_async_t broker;
 
-        struct reg_node regs;
+        uv_async_t broker[EVENT_MAX_THREADS];
+	int broker_state[EVENT_MAX_THREADS];
 
-        struct event_node events;
+	uv_barrier_t barrier;
 
         int changed;
 
         pthread_t poller;
 
-        pthread_mutex_t mutex;
-        pthread_cond_t cond;
+	uv_prepare_t prepare;
+        uv_mutex_t mutex;
+        uv_cond_t cond;
+
+	int prepare_cb_called;
+
 
         /* NOTE: Currently used only when event processing is done using
          * epoll. */
@@ -131,6 +132,9 @@ struct event_pool
 
         int destroy;
         int activethreadcount;
+
+        struct list_head event_list;
+	struct list_head reg_list;
 };
 #endif
 

@@ -1281,6 +1281,7 @@ winfsp_get_req(int type, size_t size)
         if (msg == NULL)
                 return NULL;
 
+	INIT_LIST_HEAD (&msg->list);
         msg->unique = get_fuse_op_unique();
         msg->autorelease = _gf_false;
         msg->fin = 0;

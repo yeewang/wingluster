@@ -2998,6 +2998,7 @@ fuse_readdirp_cbk(call_frame_t* frame, void* cookie, xlator_t* this,
                                 goto out;
                         }
 
+			INIT_LIST_HEAD (&msg->list);
                         msg->off = size;
                         msg->size = max_size;
 
@@ -5029,7 +5030,7 @@ fuse_thread_proc(void* data)
                                         pthread_mutex_unlock(&priv->msg_mutex);
                                         goto cleanup_exit;
                                 }
-
+				INIT_LIST_HEAD (&waitmsg->list);
                                 args = (winfsp_waitmsg_t *)waitmsg->args;
                                 args->msg = msg;
                                 waitmsg->unique = get_fuse_op_unique();

@@ -58,54 +58,54 @@ event_pool_new (int count, int eventthreadcount)
 }
 
 int
-event_register (struct event_pool* event_pool, void* translator,
+event_register (struct event_pool* event_pool, void* trans,
                 event_handler_t handler)
 {
         int ret = -1;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        ret = event_pool->ops->event_register (event_pool, translator,
+        ret = event_pool->ops->event_register (event_pool, trans,
                                                handler);
 out:
         return ret;
 }
 
 int
-event_unregister (struct event_pool* event_pool, void* handle)
+event_unregister (struct event_pool* event_pool, void* trans)
 {
         int ret = -1;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        ret = event_pool->ops->event_unregister (event_pool, handle);
+        ret = event_pool->ops->event_unregister (event_pool, trans);
 
 out:
         return ret;
 }
 
 int
-event_unregister_close (struct event_pool* event_pool, void* handle)
+event_unregister_close (struct event_pool* event_pool, void* trans)
 {
         int ret = -1;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        ret = event_pool->ops->event_unregister_close (event_pool, handle);
+        ret = event_pool->ops->event_unregister_close (event_pool, trans);
 
 out:
         return ret;
 }
 
 int
-event_select_on (struct event_pool* event_pool, void* handle, int poll_in,
+event_select_on (struct event_pool* event_pool, void* trans, int poll_in,
                  int poll_out)
 {
         int ret = -1;
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        ret = event_pool->ops->event_select_on (event_pool, handle, poll_in,
+        ret = event_pool->ops->event_select_on (event_pool, trans, poll_in,
                                                 poll_out);
 out:
         return ret;
@@ -146,12 +146,12 @@ event_pool_destroy (struct event_pool* event_pool)
 
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
 
-        pthread_mutex_lock (&event_pool->mutex);
+        uv_mutex_lock (&event_pool->mutex);
         {
                 destroy = event_pool->destroy;
                 activethreadcount = event_pool->activethreadcount;
         }
-        pthread_mutex_unlock (&event_pool->mutex);
+        uv_mutex_unlock (&event_pool->mutex);
 
         if (!destroy || (activethreadcount > 0))
                 goto out;
@@ -229,11 +229,11 @@ event_dispatch_destroy (struct event_pool* event_pool)
         /* Enter the destroy mode first, set this before reconfiguring to 0
          * threads, to prevent further reconfigure to thread count > 0.
          */
-        pthread_mutex_lock (&event_pool->mutex);
+        uv_mutex_lock (&event_pool->mutex);
         {
                 event_pool->destroy = 1;
         }
-        pthread_mutex_unlock (&event_pool->mutex);
+        uv_mutex_unlock (&event_pool->mutex);
 
         ret = event_reconfigure_threads (event_pool, 0);
         if (ret < 0)
@@ -242,7 +242,7 @@ event_dispatch_destroy (struct event_pool* event_pool)
         /* Write something onto the write end of the pipe(fd[1]) so that
          * poll wakes up and calls the handler, poller_destroy_handler()
          */
-        pthread_mutex_lock (&event_pool->mutex);
+        uv_mutex_lock (&event_pool->mutex);
         {
                 /* Write to pipe(fd[1]) and then wait for 1 second or until
                  * a poller thread that is dying, broadcasts. Make sure we
@@ -254,11 +254,11 @@ event_dispatch_destroy (struct event_pool* event_pool)
                         if (write (fd[1], "dummy", 6) == -1)
                                 break;
                         sleep_till.tv_sec = time (NULL) + 1;
-                        ret = pthread_cond_timedwait (
+                        ret = uv_cond_timedwait (
                           &event_pool->cond, &event_pool->mutex, &sleep_till);
                 }
         }
-        pthread_mutex_unlock (&event_pool->mutex);
+        uv_mutex_unlock (&event_pool->mutex);
 
         ret = event_unregister (event_pool, idx);
 
