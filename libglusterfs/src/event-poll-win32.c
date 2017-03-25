@@ -185,10 +185,6 @@ __event_invoke (struct event_pool* event_pool, int type, void* trans)
 
         ret = uv_async_send (handle);
 
-	gf_msg ("poll", GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-			"ddddddddddddddddddddddddd (trans=%p, ret=%d) to the pool",
-			trans, ret);
-
 fail:
         return ret;
 }
@@ -434,9 +430,6 @@ __event_async_cb (uv_async_t* handle)
         struct event_pool* event_pool = NULL;
 
         event_pool = handle->data;
-	gf_msg ("poll", GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-				"hhhhhhhhhhhhhhhhhhhh (event_pool=%p) to the pool",
-				event_pool);
 
 	uv_mutex_lock (&event_pool->mutex);
 	{
@@ -446,9 +439,6 @@ __event_async_cb (uv_async_t* handle)
 	}
 	uv_mutex_unlock (&event_pool->mutex);
 
-		gf_msg ("poll", GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-				"iiiiiiiiiiiiiiiiiiii (event_pool=%p) to the pool",
-				event_pool);
 }
 
 static void*

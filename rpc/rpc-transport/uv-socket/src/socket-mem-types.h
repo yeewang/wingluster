@@ -21,8 +21,8 @@ typedef enum gf_sock_mem_types_ {
         gf_sock_mt_req,
         gf_sock_mt_read_q,
         gf_sock_mt_write_q,
-        gf_sock_mt_action_req,
         gf_sock_mt_event_q,
+        gf_sock_mt_action_q,
         gf_sock_mt_end
 } gf_sock_mem_types_t;
 

@@ -108,6 +108,11 @@ typedef enum {
 } sp_rpcfrag_request_header_state_t;
 
 typedef enum {
+	AR_SOCKET_DISCONNECT,
+	AR_SOCKET_CONNECT,
+	AR_SOCKET_LISTEN,
+	AR_SOCKET_SUBMIT_REQUEST,
+	AR_SOCKET_SUBMIT_REPLY,
         AR_SOCKET_SHUTDOWN,
         AR_SOCKET_CLOSE,
 } action_req_t;
@@ -179,11 +184,9 @@ struct req_buf
 struct action_req
 {
         struct list_head list;
-        pthread_mutex_t mutex;
-        pthread_cond_t cond;
         action_req_t type;
-        int sync;
-        int ret;
+	int num_of_args;
+	void *args[10];
 };
 
 struct event_q
@@ -308,8 +311,8 @@ typedef struct
         void* translator;
 
         socket_handle_t* handle;
-
         uv_timer_t timer;
+	uv_async_t action_handle;
 
         conn_state_t rdstate;
         conn_state_t wrstate;
@@ -318,6 +321,7 @@ typedef struct
         struct list_head read_q;
 	struct list_head write_q;
         struct list_head event_q;
+	struct list_head action_q;
 	struct iobref* read_iobref;
 
 	uv_mutex_t comm_lock;
@@ -365,9 +369,6 @@ typedef struct
         char* ssl_private_key;
         char* ssl_ca_list;
         pthread_t thread;
-
-        uv_async_t action_handle;
-        uv_async_t notify_write;
 
         gf_boolean_t own_thread;
         ot_state_t ot_state;
