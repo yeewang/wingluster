@@ -34,7 +34,7 @@ static int32_t
 gf_resolve_ip6 (uv_loop_t* loop, const char* hostname, uint16_t port,
                 int family, void** dnscache, struct addrinfo** addr_info)
 {
-        int32_t ret = 0;
+        int32_t ret = -1;
         struct addrinfo hints;
         struct dnscache6* cache = NULL;
         uv_getnameinfo_t name_req;
@@ -112,6 +112,7 @@ gf_resolve_ip6 (uv_loop_t* loop, const char* hostname, uint16_t port,
                               name_req.host, name_req.service, hostname, port);
 
                 *addr_info = cache->next;
+		ret = 0;
         }
 
         if (cache->next)
@@ -133,7 +134,7 @@ gf_resolve_ip6 (uv_loop_t* loop, const char* hostname, uint16_t port,
                               name_req.host, name_req.service);
         }
 
-        return 0;
+        return ret;
 
 err:
         uv_freeaddrinfo (cache->first);

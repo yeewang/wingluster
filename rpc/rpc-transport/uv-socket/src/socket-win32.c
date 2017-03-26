@@ -997,7 +997,7 @@ ran_out:
                 *pending_count = opcount;
 
         if (!write)
-                gf_log (this->name, GF_LOG_DEBUG,
+                gf_msg (this->name, GF_LOG_ERROR, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                         "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr:%d,vector=%d",
                         opvector->iov_len, *pending_count);
         else
@@ -2836,12 +2836,6 @@ on_buf_alloc (uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf)
 		max_page = (max_page >> 1);
 	} while (iobuf == NULL);
 
-#ifdef REVIEW
-	gf_msg (this->name, GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-		"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk:priv=%p,suggested_size=%ld, addr=%p",
-		priv, suggested_size, iobuf);
-#endif /* REVIEW */
-
 	if (priv->read_iobref == NULL) {
 		priv->read_iobref = iobref_new ();
 		if (priv->read_iobref == NULL) {
@@ -3021,7 +3015,7 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 
 
 #if 0
-		gf_log (this->name, GF_LOG_ERROR,
+		gf_msg (this->name, GF_LOG_ERROR, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                 "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm:nread=%d. orign=%d.readf=%d, tid=%d, addr=%p",
                 nread, dd, bufq_get_size (&priv->read_q) , pthread_self(), bufq);
 
@@ -3420,13 +3414,7 @@ __socket_connect_handler (uv_loop_t* loop, void* translator, int action)
 	this = translator;
 	priv = this->private;
 
-        switch (action) {
-                case 1:
-                        break;
-                case 2:
-                        break;
-        }
-
+#ifdef NEVER
 	req_buf = GF_CALLOC (1, sizeof (struct req_buf), gf_sock_mt_req);
 	if (req_buf == NULL) {
 		gf_log (this->name, GF_LOG_ERROR,
@@ -3439,6 +3427,11 @@ __socket_connect_handler (uv_loop_t* loop, void* translator, int action)
 
 	uv_queue_work (loop, &req_buf->write_req, socket_init_cb,
 		       socket_after_init_cb);
+#endif /* NEVER */
+
+	THIS = this->xl;
+
+	__socket_init (loop, this);
 
         return ret;
 }

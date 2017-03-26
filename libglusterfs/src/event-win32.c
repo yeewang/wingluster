@@ -254,11 +254,13 @@ event_dispatch_destroy (struct event_pool* event_pool)
                         if (write (fd[1], "dummy", 6) == -1)
                                 break;
                         sleep_till.tv_sec = time (NULL) + 1;
-                        ret = uv_cond_timedwait (
-                          &event_pool->cond, &event_pool->mutex, &sleep_till);
                 }
         }
         uv_mutex_unlock (&event_pool->mutex);
+
+	while (!event_pool->destroy) {
+		pthread_join (event_pool->poller, NULL);
+	}
 
         ret = event_unregister (event_pool, idx);
 
