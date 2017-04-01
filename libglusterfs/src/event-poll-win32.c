@@ -237,24 +237,7 @@ event_unregister_poll (struct event_pool* event_pool, void* trans)
                 list_for_each_entry (loop_node, &event_pool->loop_list, list)
                 {
                         if (loop_node->trans == trans) {
-                                event_node =
-                                  GF_CALLOC (1, sizeof (struct event_node),
-                                             gf_common_mt_reg);
-                                if (event_node == NULL)
-                                        break;
-
-                                INIT_LIST_HEAD (&event_node->list);
-                                event_node->trans = trans;
-                                event_node->type = BT_CLOSE;
-
-                                uv_mutex_lock (&loop_node->mutex);
-                                list_add_tail (&event_node->list,
-                                               &loop_node->event_list);
-                                uv_mutex_unlock (&loop_node->mutex);
-
-				if (loop_node->inited)
-	                                uv_async_send (&loop_node->broker);
-
+				loop_node->handler = NULL;
                                 event_pool->changed = 1;
                                 break;
                         }
@@ -312,7 +295,6 @@ __event_handler (struct loop_node* loop_node, struct event_node* event_node)
 {
         switch (event_node->type) {
                 case BT_CLOSE:
-                        list_del (&loop_node->list);
                         uv_close (&loop_node->broker, __close_loop_cb);
                         break;
 
@@ -327,6 +309,9 @@ __event_handler (struct loop_node* loop_node, struct event_node* event_node)
                                         "The handler is NULL: %p",
                                         event_node->trans);
                         }
+
+			/* append a next notify to the loop */
+			uv_async_send (&loop_node->broker);
         }
 }
 
@@ -344,15 +329,14 @@ __event_async_cb (uv_async_t* handle)
                 if (!list_empty (&loop_node->event_list)) {
                         event_node = list_first_entry (
                           &loop_node->event_list, struct event_node, list);
-
 			list_del_init (&event_node->list);
+		}
+	}
+	uv_mutex_unlock (&loop_node->mutex);
 
-                        __event_handler (loop_node, event_node);
-
-                        uv_async_send (handle);
-                }
-        }
-        uv_mutex_unlock (&loop_node->mutex);
+	if (event_node) {
+                __event_handler (loop_node, event_node);
+	}
 }
 
 static void*
@@ -432,8 +416,17 @@ static void
 __close_loop_cb (uv_handle_t* handle)
 {
         struct loop_node* loop_node = NULL;
+	struct event_node* event_node = NULL;
 
         loop_node = CONTAINER_OF (handle, struct loop_node, broker);
+
+        while (!list_empty (&loop_node->event_list)) {
+                event_node = list_first_entry (
+                  &loop_node->event_list, struct event_node, list);
+
+		list_del_init (&event_node->list);
+		GF_FREE (event_node);
+        }
 
         uv_loop_close (&loop_node->loop);
         GF_FREE (loop_node);
@@ -446,14 +439,17 @@ __close_loop_cb (uv_handle_t* handle)
 static int
 event_pool_destroy_poll (struct event_pool* event_pool)
 {
-        struct loop_node* loop_node = NULL;
+        struct loop_node* loop_node = NULL, *n;
         struct event_node* event_node = NULL;
         int ret = 0;
 
         uv_mutex_lock (&event_pool->mutex);
         {
-                list_for_each_entry (loop_node, &event_pool->loop_list, list)
+                list_for_each_entry_safe (loop_node, n, &event_pool->loop_list,
+			                  list)
                 {
+                	list_del_init (&loop_node->list);
+
                         event_node = GF_CALLOC (1, sizeof (struct event_node),
                                                 gf_common_mt_reg);
                         if (event_node == NULL) {

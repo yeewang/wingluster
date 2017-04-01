@@ -117,6 +117,7 @@ typedef enum {
         AR_SOCKET_CLOSE,
 } action_req_t;
 
+#ifdef NEVER
 typedef struct  {
 	int   inited;
 	void *priv;
@@ -128,6 +129,7 @@ typedef struct  {
 		uv_udp_t udp;
 	} h;
 } socket_handle_t;
+#endif /* NEVER */
 
 struct ioq
 {
@@ -295,25 +297,40 @@ typedef enum {
         OT_PLEASE_DIE, /* Poller termination requested. */
 } ot_state_t;
 
-#ifdef GF_CYGWIN_HOST_OS
+/* Session states. */
+typedef enum sess_state {
+	S_REQ_CONNECT,	    /* Wait for uv_tcp_connect() to complete. */
+	S_HANDSHAKE,        /* Wait for client handshake. */
+	S_KILL,             /* Tear down session. */
+	s_almost_dead_0,    /* Waiting for finalizers to complete. */
+	s_almost_dead_1,    /* Waiting for finalizers to complete. */
+	s_almost_dead_2,    /* Waiting for finalizers to complete. */
+	s_almost_dead_3,    /* Waiting for finalizers to complete. */
+	s_almost_dead_4,    /* Waiting for finalizers to complete. */
+	S_DEAD              /* Dead. Safe to free now. */
+} sess_state_t;
+
 typedef enum {
         C_BUSY, /* Busy; waiting for incoming data or for a write to complete.
                    */
         C_DONE, /* Done; read incoming data or write finished. */
-        C_STOP, /* Stopped. */
         C_DEAD
 } conn_state_t;
-#endif /* GF_CYGWIN_HOST_OS */
 
 typedef struct
-{
+{int kkk, jjj;
 	pthread_t th_id;
         void* translator;
 
-        socket_handle_t* handle;
+        uv_tcp_t handle;
         uv_timer_t timer;
-	uv_async_t action_handle;
+	uv_async_t action;
 
+	gf_boolean_t handle_inited;
+	gf_boolean_t timer_inited;
+	gf_boolean_t action_handle_inited;
+
+	sess_state_t state;
         conn_state_t rdstate;
         conn_state_t wrstate;
         ssize_t result;
