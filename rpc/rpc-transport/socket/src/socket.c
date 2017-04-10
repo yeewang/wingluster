@@ -840,9 +840,6 @@ __socket_keepalive (int fd, int family, int keepalive_intvl,
 #if defined(GF_SOLARIS_HOST_OS) || defined(__FreeBSD__)
         ret = setsockopt (fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive_intvl,
                           sizeof (keepalive_intvl));
-#elif defined(GF_CYGWIN_HOST_OS)
-        ret = setsockopt (fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive_intvl,
-                  sizeof (keepalive_intvl));
 #else
         ret = setsockopt (fd, IPPROTO_TCP, TCP_KEEPALIVE, &keepalive_intvl,
                           sizeof (keepalive_intvl));
@@ -1164,6 +1161,7 @@ socket_event_poll_err (rpc_transport_t *this)
         pthread_mutex_unlock (&priv->lock);
 
         rpc_transport_notify (this, RPC_TRANSPORT_DISCONNECT, this);
+
 out:
         return ret;
 }
@@ -2276,10 +2274,8 @@ socket_connect_finish (rpc_transport_t *this)
 
         pthread_mutex_lock (&priv->lock);
         {
-                if (priv->connected != 0) {
-                        ret = 0;
+                if (priv->connected != 0)
                         goto unlock;
-                }
 
                 get_transport_identifiers (this);
 
@@ -2291,8 +2287,7 @@ socket_connect_finish (rpc_transport_t *this)
                 if (ret == -1 && errno != EINPROGRESS) {
                         if (!priv->connect_finish_log) {
                                 gf_log (this->name, GF_LOG_ERROR,
-                                        "sock %d connection to %s failed (%s)",
-                                        priv->sock,
+                                        "connection to %s failed (%s)",
                                         this->peerinfo.identifier,
                                         strerror (errno));
                                 priv->connect_finish_log = 1;
@@ -2371,12 +2366,7 @@ socket_event_handler (int fd, int idx, void *data,
         if ((ret < 0) || poll_err) {
                 /* Logging has happened already in earlier cases */
                 gf_log ("transport", ((ret >= 0) ? GF_LOG_INFO : GF_LOG_DEBUG),
-                        "disconnecting now:ret=%d, fd=%d,poll_err=(%s|%s|%s), %s",
-                        ret, fd,
-                        (poll_err & POLLHUP) ? "POLLHUP" : "0",
-                        (poll_err & POLLERR) ? "POLLERR" : "0",
-                        (poll_err & POLLNVAL) ? "POLLNVAL" : "0",
-                        strerror (errno));
+                        "disconnecting now");
                 socket_event_poll_err (this);
                 rpc_transport_unref (this);
 	}
@@ -2396,7 +2386,6 @@ socket_poller (void *ctx)
 	int               ret = 0;
         uint32_t          gen = 0;
         char             *cname = NULL;
-        int               event = 0;
 
         GF_ASSERT (this);
         /* Set THIS early on in the life of this thread, instead of setting it
@@ -2463,12 +2452,10 @@ socket_poller (void *ctx)
 		else {
 			pfd[0].events |= POLL_MASK_INPUT;
 		}
-                event = 0;
-		if (poll (pfd,2,-1) < 0) {
+		if (poll(pfd,2,-1) < 0) {
 			gf_log(this->name,GF_LOG_ERROR,"poll failed");
 			break;
 		}
-
 		if (pfd[0].revents & POLL_MASK_ERROR) {
 			gf_log(this->name,GF_LOG_ERROR,
 			       "poll error on pipe");
@@ -2476,7 +2463,6 @@ socket_poller (void *ctx)
 		}
 
 		if (pfd[1].revents & POLL_MASK_INPUT) {
-                        event = 1;
 			ret = socket_event_poll_in(this);
 			if (ret >= 0) {
 				/* Suppress errors while making progress. */
@@ -2493,8 +2479,7 @@ socket_poller (void *ctx)
                                 break;
                         }
 		}
-		if (pfd[1].revents & POLL_MASK_OUTPUT) {
-                        event = 2;
+		else if (pfd[1].revents & POLL_MASK_OUTPUT) {
 			ret = socket_event_poll_out(this);
 			if (ret >= 0) {
 				/* Suppress errors while making progress. */
@@ -2511,8 +2496,7 @@ socket_poller (void *ctx)
                                 break;
                         }
 		}
-
-                if (event == 0) {
+		else {
 			/*
 			 * This usually means that we left poll() because
 			 * somebody pushed a byte onto our pipe.  That wakeup
@@ -2521,7 +2505,6 @@ socket_poller (void *ctx)
 			 */
 			ret = 0;
 		}
-
 		if (pfd[1].revents & POLL_MASK_ERROR) {
 			gf_log(this->name,GF_LOG_ERROR,
 			       "poll error on socket");
@@ -2577,8 +2560,6 @@ socket_spawn (rpc_transport_t *this)
 {
         socket_private_t        *priv   = this->private;
         int ret = -1;
-        struct sched_param param;
-
         switch (priv->ot_state) {
         case OT_IDLE:
         case OT_PLEASE_DIE:
@@ -2602,11 +2583,6 @@ socket_spawn (rpc_transport_t *this)
                         "could not create poll thread");
                 ret = -1;
         }
-
-#ifdef GF_CYGWIN_HOST_OS
-        param.sched_priority = 20;
-        pthread_setschedparam(priv->thread, SCHED_FIFO, &param);
-#endif /* GF_CYGWIN_HOST_OS */
 
         return ret;
 }
@@ -2900,89 +2876,6 @@ socket_fix_ssl_opts (rpc_transport_t *this, socket_private_t *priv,
         }
 }
 
-/* ljs: new interface: used to probe the remote host port */
-static int
-socket_probe (char *addr, int timeout)
-{
-       int sfl;
-       int err;
-       int rtn;
-       int port;
-       int sock = -1;
-       char *p = NULL;
-       char dst[1024] = {0};
-       struct sockaddr_in sin;
-
-       strcpy(dst, addr);
-       if ((p = strchr(dst, ':')) == NULL) {
-               rtn = -1;
-               goto out;
-       }
-
-       *p = 0;
-       port = atoi(p + 1);
-       inet_aton(dst, &sin.sin_addr);
-       sin.sin_family = AF_INET;
-       sin.sin_port = htons(port);
-
-       sock = socket(AF_INET, SOCK_STREAM, 0);
-       if (sock < 0) {
-               rtn = -2;
-               goto out;
-       }
-
-       sfl = fcntl(sock, F_GETFL, 0);
-       fcntl(sock, F_SETFL, sfl | O_NONBLOCK);
-
-       rtn = connect(sock, (struct sockaddr *)&sin, sizeof(sin));
-       err = errno;
-       if (rtn < 0) {
-               int error = 0;
-               int maxfd = sock + 1;
-               fd_set rset, wset;
-               struct timeval tv;
-
-               FD_ZERO(&rset);
-               FD_ZERO(&wset);
-               FD_SET(sock, &rset);
-               FD_SET(sock, &wset);
-
-               tv.tv_sec = timeout;
-               rtn = select(maxfd, &rset, &wset, NULL, &tv);
-               if (rtn <= 0) {
-                       rtn = -3;
-                       goto out;
-               }
-
-               if (FD_ISSET(sock, &rset) && FD_ISSET(sock, &wset)) {
-                       int ret = 0;
-                       int len = sizeof(error);
-                       ret = getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len);
-                       if (ret < 0) {
-                               rtn = -4;
-                               goto out;
-                       }
-
-                       if (error != 0) {
-                               rtn = -5;
-                               goto out;
-                       }
-
-                       rtn = 0;
-               }
-
-               if (FD_ISSET(sock, &wset) && !FD_ISSET(sock, &rset)) {
-                       rtn = 0;
-                       goto out;
-               }
-       }
-
-out:
-       if (sock >= 0)
-               close(sock);
-       return rtn;
-}
-
 static int
 socket_connect (rpc_transport_t *this, int port)
 {
@@ -3001,8 +2894,6 @@ socket_connect (rpc_transport_t *this, int port)
         pthread_t                      th_id           = {0, };
         char                          *cname           = NULL;
         gf_boolean_t                   ign_enoent      = _gf_false;
-        int                            sock_opt        = 0;
-        socklen_t                      sock_opt_size   = 0;
 
         GF_VALIDATE_OR_GOTO ("socket", this, err);
         GF_VALIDATE_OR_GOTO ("socket", this->private, err);
@@ -3077,83 +2968,16 @@ socket_connect (rpc_transport_t *this, int port)
                                         strerror (errno));
                         }
 
-                        sock_opt_size = sizeof(sock_opt);
-                        if (getsockopt (priv->sock, SOL_SOCKET, SO_RCVBUF,
-                                        &sock_opt,
-                                        &sock_opt_size) < 0) {
-                                gf_log (this->name, GF_LOG_ERROR,
-                                        "getting receive window "
-                                        "size failed: %d: %d: %s",
-                                        priv->sock, sock_opt,
-                                        strerror (errno));
-                        }
-                        else {
-                                gf_log (this->name, GF_LOG_DEBUG,
-                                        "setting receive window "
-                                        "size succeeded: %d: %d",
-                                        priv->sock, sock_opt);
-                        }
-
-                        sock_opt = priv->windowsize;
-                        sock_opt_size = sizeof(sock_opt);
                         if (setsockopt (priv->sock, SOL_SOCKET, SO_SNDBUF,
-                                        &sock_opt,
-                                        sock_opt_size) < 0) {
+                                        &priv->windowsize,
+                                        sizeof (priv->windowsize)) < 0) {
                                 gf_log (this->name, GF_LOG_ERROR,
                                         "setting send window size "
                                         "failed: %d: %d: %s",
                                         priv->sock, priv->windowsize,
                                         strerror (errno));
                         }
-
-                        sock_opt = 0;
-                        sock_opt_size = sizeof(sock_opt);
-                        if (getsockopt (priv->sock, SOL_SOCKET, SO_SNDBUF,
-                                        &sock_opt,
-                                        &sock_opt_size) < 0) {
-                                gf_log (this->name, GF_LOG_ERROR,
-                                        "getting send window "
-                                        "size failed: %d: %d: %s",
-                                        priv->sock, sock_opt,
-                                        strerror (errno));
-                        }
-                        else {
-                                gf_log (this->name, GF_LOG_DEBUG,
-                                        "setting send window "
-                                        "size succeeded: %d: %d",
-                                        priv->sock, sock_opt);
-                        }
                 }
-
-#ifdef GF_CYGWIN_HOST_OS
-
-                sock_opt = 1460;
-                if (setsockopt (priv->sock, IPPROTO_TCP, TCP_MAXSEG,
-                        &sock_opt, sizeof(sock_opt)) < 0) {
-                        gf_log (this->name, GF_LOG_ERROR,
-                                "setting tcp MSS size"
-                                "failed: %d: %d: %s",
-                                priv->sock, sock_opt,
-                                strerror (errno));
-                }
-
-                sock_opt = 0;
-                sock_opt_size = sizeof(sock_opt);
-                if (getsockopt(priv->sock, IPPROTO_TCP, TCP_MAXSEG,
-			&sock_opt, &sock_opt_size) < 0) {
-                        gf_log (this->name, GF_LOG_ERROR,
-                                "getting tcp MSS size "
-                                "failed: %d: %d: %s",
-                                priv->sock, sock_opt,
-                                strerror (errno));
-                }
-                else {
-                        gf_log (this->name, GF_LOG_DEBUG,
-                                "setting tcp MSS size "
-                                "succeeded: %d: %d",
-                                priv->sock, sock_opt);
-                }
-#endif
 
                 if (priv->nodelay && (sa_family != AF_UNIX)) {
                         ret = __socket_nodelay (priv->sock);
@@ -3194,8 +3018,6 @@ socket_connect (rpc_transport_t *this, int port)
                ign_enoent = dict_get_str_boolean (this->options,
                    "transport.socket.ignore-enoent", _gf_false);
 
-#ifndef GF_CYGWIN_HOST_OS
-
                 ret = client_bind (this, SA (&this->myinfo.sockaddr),
                                    &this->myinfo.sockaddr_len, priv->sock);
                 if (ret == -1) {
@@ -3203,26 +3025,6 @@ socket_connect (rpc_transport_t *this, int port)
                                 "client bind failed: %s", strerror (errno));
                         goto handler;
                 }
-#endif
-
-#ifdef GF_CYGWIN_HOST_OS
-                /* Cygwin skips calls to setsockopt(SO_REUSEADDR) on
-                   systems supporting enhanced socket security.
-                   https://cygwin.com/ml/cygwin/2009-12/msg00508.html
-                   https://msdn.microsoft.com/en-us/library/ms740621
-                */
-
-                int opt = 1;
-                if (setsockopt (priv->sock, SOL_SOCKET, SO_REUSEADDR,
-                                &opt,
-                                sizeof (opt)) < 0) {
-                        gf_log (this->name, GF_LOG_ERROR,
-                                "setting socket connect "
-                                "failed: %d: %s",
-                                priv->sock,
-                                strerror (errno));
-                }
-#endif
 
                 if (!priv->use_ssl && !priv->bio && !priv->own_thread) {
                         ret = __socket_nonblock (priv->sock);
@@ -3791,7 +3593,6 @@ struct rpc_transport_ops tops = {
         .get_myname         = socket_getmyname,
         .get_myaddr         = socket_getmyaddr,
 	.throttle           = socket_throttle,
-	.probe              = socket_probe,
 };
 
 int
@@ -4471,8 +4272,7 @@ struct volume_options options[] = {
         },
 
         { .key   = {"non-blocking-io"},
-          .type  = GF_OPTION_TYPE_BOOL,
-          .default_value = "on"
+          .type  = GF_OPTION_TYPE_BOOL
         },
         { .key   = {"tcp-window-size"},
           .type  = GF_OPTION_TYPE_SIZET,
@@ -4481,27 +4281,21 @@ struct volume_options options[] = {
         },
         { .key   = {"transport.tcp-user-timeout"},
           .type  = GF_OPTION_TYPE_INT,
-          .default_value = "42",
         },
         { .key   = {"transport.socket.nodelay"},
-          .type  = GF_OPTION_TYPE_BOOL,
-          .default_value = "on"
+          .type  = GF_OPTION_TYPE_BOOL
         },
         { .key   = {"transport.socket.lowlat"},
-          .type  = GF_OPTION_TYPE_BOOL,
-          .default_value = "on"
+          .type  = GF_OPTION_TYPE_BOOL
         },
         { .key   = {"transport.socket.keepalive"},
-          .type  = GF_OPTION_TYPE_BOOL,
-          .default_value = "on"
+          .type  = GF_OPTION_TYPE_BOOL
         },
         { .key   = {"transport.socket.keepalive-interval"},
-          .type  = GF_OPTION_TYPE_INT,
-          .default_value = "20"
+          .type  = GF_OPTION_TYPE_INT
         },
         { .key   = {"transport.socket.keepalive-time"},
-          .type  = GF_OPTION_TYPE_INT,
-          .default_value = "20"
+          .type  = GF_OPTION_TYPE_INT
         },
         { .key   = {"transport.socket.listen-backlog"},
           .type  = GF_OPTION_TYPE_INT

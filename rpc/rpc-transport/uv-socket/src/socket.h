@@ -157,6 +157,7 @@ struct bufq
 	struct iobuf* iobuf;
         struct iovec vector;
         size_t read;
+	struct iobref* iobref;
 };
 
 struct write_q
@@ -318,7 +319,7 @@ typedef enum {
 } conn_state_t;
 
 typedef struct
-{int kkk, jjj;
+{
 	pthread_t th_id;
         void* translator;
 
@@ -339,7 +340,6 @@ typedef struct
 	struct list_head write_q;
         struct list_head event_q;
 	struct list_head action_q;
-	struct iobref* read_iobref;
 
 	uv_mutex_t comm_lock;
         uv_cond_t comm_cond;

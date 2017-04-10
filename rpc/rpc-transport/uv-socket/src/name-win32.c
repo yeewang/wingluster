@@ -82,7 +82,7 @@ gf_resolve_ip6 (uv_loop_t* loop, const char* hostname, uint16_t port,
                         gf_msg ("resolver", GF_LOG_ERROR, 0,
                                 LG_MSG_GETADDRINFO_FAILED, "getaddrinfo failed"
                                                            " (%s)",
-                                gai_strerror (ret));
+                                uv_strerror (ret));
 
                         GF_FREE (*dnscache);
                         *dnscache = NULL;
