@@ -157,7 +157,6 @@ struct bufq
 	struct iobuf* iobuf;
         struct iovec vector;
         size_t read;
-	struct iobref* iobref;
 };
 
 struct write_q
@@ -315,13 +314,20 @@ typedef enum {
         C_BUSY, /* Busy; waiting for incoming data or for a write to complete.
                    */
         C_DONE, /* Done; read incoming data or write finished. */
+	C_STOP,
         C_DEAD
 } conn_state_t;
+
+typedef enum {
+        FC_WRITE = 0x01, /* can write */
+        FC_READ  = 0x02, /* can read */
+} flowctrl_state_t;
 
 typedef struct
 {
 	pthread_t th_id;
         void* translator;
+	uv_loop_t* loop;
 
         uv_tcp_t handle;
         uv_timer_t timer;
@@ -334,7 +340,11 @@ typedef struct
 	sess_state_t state;
         conn_state_t rdstate;
         conn_state_t wrstate;
+	int rdcount;
+	int wrcount;
         ssize_t result;
+
+	flowctrl_state_t fcstate;
 
         struct list_head read_q;
 	struct list_head write_q;

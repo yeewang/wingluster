@@ -29,8 +29,8 @@ struct iobuf_init_config gf_iobuf_init_config[] = {
         {2 * 1024, 512},
         {8 * 1024, 128},
         {32 * 1024, 64},
-        {128 * 1024, 32},
-        {256 * 1024, 8},
+        {128 * 1024, 16},
+        {256 * 1024, 32},
         {1 * 1024 * 1024, 2},
 };
 
@@ -152,9 +152,14 @@ __iobuf_arena_destroy (struct iobuf_pool *iobuf_pool,
 
         __iobuf_arena_destroy_iobufs (iobuf_arena);
 
+#if 1
         if (iobuf_arena->mem_base
             && iobuf_arena->mem_base != MAP_FAILED)
                 munmap (iobuf_arena->mem_base, iobuf_arena->arena_size);
+#else
+	if (iobuf_arena->mem_base)
+		free (iobuf_arena->mem_base);
+#endif /* NEVER */
 
         GF_FREE (iobuf_arena);
 out:
@@ -189,6 +194,7 @@ __iobuf_arena_alloc (struct iobuf_pool *iobuf_pool, size_t page_size,
 
         iobuf_arena->arena_size = rounded_size * num_iobufs;
 
+#if 1
         iobuf_arena->mem_base = mmap (NULL, iobuf_arena->arena_size,
                                       PROT_READ|PROT_WRITE,
                                       MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
@@ -197,6 +203,15 @@ __iobuf_arena_alloc (struct iobuf_pool *iobuf_pool, size_t page_size,
                         "mapping failed");
                 goto err;
         }
+#else
+	iobuf_arena->mem_base = malloc (iobuf_arena->arena_size);
+	if (iobuf_arena->mem_base == NULL) {
+		gf_msg (THIS->name, GF_LOG_WARNING, 0, LG_MSG_MAPPING_FAILED,
+					"allocing failed");
+		goto err;
+	}
+	memset (iobuf_arena->mem_base, 0, iobuf_arena->arena_size);
+#endif /* NEVER */
 
         if (iobuf_pool->rdma_registration) {
                 iobuf_pool->rdma_registration (iobuf_pool->device,

@@ -1551,6 +1551,7 @@ fuse_unlink(xlator_t* this, winfsp_msg_t* msg)
 
         state->stub = msg;
 
+#ifdef NEVER /* the following code can cause inode_unref() crash because of (ref=0) */
         gfpath = fuse_path_from_path(this, args->path, state->itable);
         if (gfpath == NULL) {
                 winfsp_send_err(this, msg, ENOENT);
@@ -1561,8 +1562,9 @@ fuse_unlink(xlator_t* this, winfsp_msg_t* msg)
         bname = basename(gfpath);
         if (*bname == '/')
                 bname++;
+#endif /* NEVER */
 
-        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, bname);
+        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, name);
 
         fuse_resolve_and_resume(state, fuse_unlink_resume);
 
@@ -1617,6 +1619,7 @@ fuse_rmdir(xlator_t* this, winfsp_msg_t* msg)
 
         state->stub = msg;
 
+#ifdef NEVER /* the following code can cause inode_unref() crash because of (ref=0) */
         gfpath = fuse_path_from_path(this, args->path, state->itable);
         if (gfpath == NULL) {
                 winfsp_send_err(this, msg, ENOENT);
@@ -1627,8 +1630,9 @@ fuse_rmdir(xlator_t* this, winfsp_msg_t* msg)
         bname = basename(gfpath);
         if (*bname == '/')
                 bname++;
+#endif /* NEVER */
 
-        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, bname);
+        fuse_resolve_entry_init(state, &state->resolve, finh->nodeid, name);
 
         fuse_resolve_and_resume(state, fuse_rmdir_resume);
 
@@ -4988,16 +4992,16 @@ fuse_thread_proc(void* data)
                         while (list_empty(&priv->msg_list) ||
                                !list_empty(&priv->wait_list)) {
 
-#ifdef DEBUG
+#if 0
                                 winfsp_msg_t* tt;
                                 list_for_each_entry(tt, &priv->msg_list, list) {
-                                        gf_log(this->name, GF_LOG_DEBUG,
+                                        gf_msg(this->name, GF_LOG_INFO, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                                                "fuse is requesting message %p type: %d, unique: %lu",
                                                tt, tt->type, tt->unique);
                                 }
 
                                 list_for_each_entry(tt, &priv->wait_list, list) {
-                                        gf_log(this->name, GF_LOG_DEBUG,
+                                        gf_msg(this->name, GF_LOG_INFO, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                                                "fuse is processing message %p type: %d, unique: %lu",
                                                ((winfsp_waitmsg_t *)tt->args)->msg,
                                                ((winfsp_waitmsg_t *)tt->args)->msg->type,
@@ -5046,7 +5050,7 @@ fuse_thread_proc(void* data)
 
                 winfsp_opendir_t * args = (winfsp_opendir_t *)msg->args;
 
-                gf_log(this->name, GF_LOG_DEBUG,
+                gf_msg(this->name, GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                        "fuse recieved message type: %d, unique: %lu, path: %s",
                        msg->type, msg->unique, args->path);
 
