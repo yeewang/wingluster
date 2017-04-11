@@ -30,7 +30,16 @@ $(top_builddir)/libglusterfs/src/libglusterfs.la:
 uninstall-local:
 	rm -f $(DESTDIR)$(sbindir)/glusterfs
 	rm -f $(DESTDIR)$(sbindir)/glusterd
-
+	
+if GF_CYGWIN_HOST_OS
+install-data-local:
+	$(INSTALL) -d -m 755 $(DESTDIR)$(localstatedir)/run
+	$(INSTALL) -d -m 755 $(DESTDIR)$(localstatedir)/run/gluster
+	$(INSTALL) -d -m 755 $(DESTDIR)$(localstatedir)/log/glusterfs
+	$(INSTALL) -d -m 755 $(DESTDIR)$(sbindir)
+	cp $(DESTDIR)$(sbindir)/glusterfsd $(DESTDIR)$(sbindir)/glusterfs
+	cp $(DESTDIR)$(sbindir)/glusterfsd $(DESTDIR)$(sbindir)/glusterd
+else
 install-data-local:
 	$(INSTALL) -d -m 755 $(DESTDIR)$(localstatedir)/run
 	$(INSTALL) -d -m 755 $(DESTDIR)$(localstatedir)/run/gluster
@@ -40,3 +49,4 @@ install-data-local:
 	rm -f $(DESTDIR)$(sbindir)/glusterd
 	ln -s glusterfsd $(DESTDIR)$(sbindir)/glusterfs
 	ln -s glusterfsd $(DESTDIR)$(sbindir)/glusterd
+endif
