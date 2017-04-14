@@ -205,12 +205,9 @@ static int __socket_handle_init (uv_loop_t* loop, rpc_transport_t* this);
 
 static inline size_t bufq_get_size (struct bufq* readq);
 
-static inline size_t writeq_get_size (struct write_q* writeq);
+static inline size_t writeq_get_size (struct ioq* writeq);
 
 static int socket_do_next (rpc_transport_t* this);
-
-static void async_rpc_transport_notify (rpc_transport_t* this, int event,
-                                        void* data);
 
 static void free_bufq (struct bufq* bufq);
 
@@ -777,7 +774,7 @@ __socket_readv_internal (socket_private_t* priv, struct iovec* opvector,
 
         gf_log (this->name, GF_LOG_ERROR,
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:"
-                "tid=%d,read=%d,origin=%d,remain=%d,%s",
+                "tid=%p,read=%d,origin=%d,remain=%d,%s",
                 pthread_self (), totol, origin, bufq_get_size (&priv->read_q),
                 origin - bufq_get_size (&priv->read_q) == totol ? "OKKKKK"
                                                                 : "BADDDD");
@@ -1152,7 +1149,7 @@ __socket_ioq_churn_entry (rpc_transport_t* this, struct ioq* entry)
 #if 0
 	for (int i = 0; i < entry->pending_count; i++) {
 		if (i == 2 && entry->pending_vector[i].iov_len != 131072)
-		gf_log (this->name, GF_LOG_INFO, "WRITE: tid=%d, %p, c=%d,i=%d, len=%d",
+		gf_log (this->name, GF_LOG_INFO, "WRITE: tid=%p, %p, c=%d,i=%d, len=%d",
 			pthread_self (),  entry->pending_vector[i].iov_base, entry->pending_count, i,
 			entry->pending_vector[i].iov_len);
 	}
@@ -1185,56 +1182,33 @@ __socket_ioq_append_entry (rpc_transport_t* this, struct ioq* entry)
 {
         int ret = 0;
         socket_private_t* priv = NULL;
-        struct write_q* write_q = NULL;
         int i = 0;
 
         priv = this->private;
 
-        write_q = GF_CALLOC (1, sizeof (*write_q), gf_sock_mt_write_q);
-        if (!write_q)
-                return -1;
-
 #if 0
 	for (int i = 0; i < entry->pending_count; i++) {
 		gf_log (this->name, GF_LOG_ERROR, "yyyy"
-						  "tid=%d, %p, c=%d,i=%d, len=%d",
+						  "tid=%p, %p, c=%d,i=%d, len=%d",
 			pthread_self (),  entry->pending_vector[i].iov_base, entry->pending_count, i,
 			entry->pending_vector[i].iov_len);
 	}
 #endif /* NEVER */
 
-        write_q->ioq = entry;
-        write_q->count = 0;
-        for (; i < min (entry->pending_count,
-                        sizeof (write_q->bufs) / sizeof (write_q->bufs[0]));
-             i++) {
-                if (entry->pending_vector[i].iov_len > 0) {
-                        write_q->bufs[write_q->count].base =
-                          entry->pending_vector[i].iov_base;
-                        write_q->bufs[write_q->count].len =
-                          entry->pending_vector[i].iov_len;
-                }
-
-                entry->pending_vector[i].iov_base = NULL;
-                entry->pending_vector[i].iov_len = 0;
-
-                write_q->count++;
-        }
-
-        INIT_LIST_HEAD (&write_q->list);
+        INIT_LIST_HEAD (&entry->list);
 
 
 #if 0
 	for (int i = 0; i < write_q->count; i++) {
 		gf_log (this->name, GF_LOG_ERROR, "wwwww"
-						  "tid=%d, %p, c=%d,i=%d, len=%d",
+						  "tid=%p, %p, c=%d,i=%d, len=%d",
 			pthread_self (), write_q->bufs[i].base, write_q->count, i,
 			write_q->bufs[i].len);
 	}
 #endif /* NEVER */
 
 	uv_mutex_lock (&priv->comm_lock);
-        list_add_tail (write_q, &priv->write_q);
+        list_add_tail (entry, &priv->write_q);
 	uv_mutex_unlock (&priv->comm_lock);
 
         return ret;
@@ -2405,7 +2379,7 @@ unlock:
         //-- pthread_mutex_unlock (&priv->lock);
 
         gf_log (this->name, GF_LOG_DEBUG,
-                "connected to %s, (tid=%d, this=%p, priv->connected=%d)",
+                "connected to %s, (tid=%p, this=%p, priv->connected=%d)",
                 this->peerinfo.identifier, pthread_self(), this, priv->connected);
 
         if (notify_rpc) {
@@ -2413,36 +2387,6 @@ unlock:
         }
 out:
         return ret;
-}
-
-static void
-async_rpc_transport_notify (rpc_transport_t* this, int event, void* data)
-{
-        socket_private_t* priv = NULL;
-        struct event_q* event_q = NULL;
-        int ret = -1;
-
-        priv = this->private;
-
-        event_q = GF_CALLOC (1, sizeof (struct event_q), gf_sock_mt_event_q);
-        if (event_q == NULL) {
-                gf_log (this->name, GF_LOG_ERROR,
-                        "failure on allocating gf_sock_mt_event_q.");
-
-                return;
-        }
-
-        event_q->event = event;
-        event_q->data = data;
-
-        uv_mutex_lock (&priv->comm_lock);
-        {
-                INIT_LIST_HEAD (&event_q->list);
-                list_add_tail (event_q, &priv->event_q);
-
-                uv_cond_broadcast (&priv->comm_cond);
-        }
-        uv_mutex_unlock (&priv->comm_lock);
 }
 
 static int
@@ -2691,16 +2635,16 @@ bufq_get_size (struct bufq* read_q)
 }
 
 static inline size_t
-writeq_get_size (struct write_q* write_q)
+writeq_get_size (struct ioq* write_q)
 {
-        struct write_q* entry = NULL;
+        struct ioq* entry = NULL;
         size_t size = 0;
         int i = 0;
 
         list_for_each_entry (entry, &write_q->list, list)
         {
-                for (i = 0; i < entry->count; i++)
-                        size += entry->bufs[i].len;
+                for (i = 0; i < entry->pending_count; i++)
+                        size += entry->vector[i].iov_len;
         }
 
         return size;
@@ -2749,17 +2693,28 @@ static int
 socket_write_start (rpc_transport_t* this)
 {
         socket_private_t* priv = NULL;
-        struct write_q* write_q = NULL;
+        struct ioq* write_q = NULL;
+        struct iobuf* iobuf = NULL;
         struct req_buf* req_buf = NULL;
+        uv_buf_t bufs[MAX_IOVEC];
+        int i = 0, count = 0;
         int ret = -1;
 
         priv = this->private;
 
         uv_mutex_lock (&priv->comm_lock);
-        write_q = list_first_entry (&priv->write_q, struct write_q, list);
-        list_del_init (&write_q->list);
+	list_for_each_entry (write_q, &priv->write_q, list) {
+		list_del_init (&write_q->list);
+		break;
+	}
         uv_mutex_unlock (&priv->comm_lock);
 
+	if (write_q == NULL) {
+		ret = -1;
+		goto out;
+	}
+
+#ifdef NEVER
         req_buf = GF_CALLOC (1, sizeof (struct req_buf), gf_sock_mt_req);
         if (req_buf == NULL) {
                 ret = -1;
@@ -2767,14 +2722,18 @@ socket_write_start (rpc_transport_t* this)
                         "failure on allocating req_buf.");
                 goto out;
         }
-
+#else
+        iobuf = iobuf_get2 (this->ctx->iobuf_pool, sizeof (struct req_buf));
+        req_buf = iobuf_ptr (iobuf);
+        req_buf->iobuf = iobuf;
         req_buf->priv = priv;
         req_buf->data = write_q;
+#endif /* NEVER */
 
 #if 0
 	for (int i = 0; i < write_q->count; i++) {
 		gf_log (this->name, GF_LOG_ERROR, "WRITE: "
-						  "tid=%d, %p, c=%d,i=%d, len=%d",
+						  "tid=%p, %p, c=%d,i=%d, len=%d",
 			pthread_self (), write_q->bufs[i].base, write_q->count, i,
 			write_q->bufs[i].len);
 	}
@@ -2783,8 +2742,19 @@ socket_write_start (rpc_transport_t* this)
         priv->wrstate = C_BUSY;
 	priv->wrcount++;
 
-        ret = uv_write (&req_buf->write_req, &priv->handle, write_q->bufs,
-                        write_q->count, &socket_write_cb);
+        count = 0;
+        for (; i < write_q->pending_count; i++) {
+                if (write_q->pending_vector[i].iov_len > 0) {
+                        bufs[count].base =
+                          write_q->pending_vector[i].iov_base;
+                        bufs[count].len =
+                          write_q->pending_vector[i].iov_len;
+                }
+                count++;
+        }
+
+        ret = uv_write (&req_buf->write_req, &priv->handle, bufs,
+                        count, &socket_write_cb);
         if (ret) {
                 gf_log (this->name, GF_LOG_ERROR,
                         "failure on writing socket: priv=%p, %s.", priv,
@@ -2802,8 +2772,10 @@ static int
 socket_write_directly (rpc_transport_t* this)
 {
 	socket_private_t* priv = NULL;
-	struct write_q* write_q = NULL, *n;
+	struct ioq* write_q = NULL, *n;
 	size_t size = 0, written = 0;
+        uv_buf_t bufs[MAX_IOVEC];
+        int i = 0, count = 0;
 
 	priv = this->private;
 
@@ -2813,15 +2785,24 @@ socket_write_directly (rpc_transport_t* this)
 #if 0
 	for (int i = 0; i < write_q->count; i++) {
 			gf_log (this->name, GF_LOG_ERROR, "WWWWWWWW"
-							  "tid=%d, %p, len=%d",
+							  "tid=%p, %p, len=%d",
 				pthread_self (), write_q->bufs[i].base,
 				write_q->bufs[i].len);
 	}
 #endif /* NEVER */
 
+                count = 0;
+                for (; i < write_q->pending_count; i++) {
+                        if (write_q->pending_vector[i].iov_len > 0) {
+                                bufs[count].base =
+                                  write_q->pending_vector[i].iov_base;
+                                bufs[count].len =
+                                  write_q->pending_vector[i].iov_len;
+                        }
+                        count++;
+                }
 
-		size = uv_try_write (&priv->handle, write_q->bufs,
-				     write_q->count);
+		size = uv_try_write (&priv->handle, bufs, count);
 		if (size <= 0) {
 			gf_msg (this->name, GF_LOG_ERROR, 0,
 			   LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
@@ -2832,14 +2813,14 @@ socket_write_directly (rpc_transport_t* this)
 
 #ifdef DEBUG
 		written = 0;
-		for (int i = 0; i < write_q->count; i++)
-			written += write_q->bufs[i].len;
+		for (int i = 0; i < count; i++)
+			written += bufs[i].len;
 
 		GF_ASSERT (written == size);
 #endif /* DEBUG */
 
 		list_del (&write_q->list);
-		__socket_ioq_entry_free (write_q->ioq);
+		__socket_ioq_entry_free (write_q);
 		this->total_bytes_write += size;
 	}
 
@@ -2847,6 +2828,28 @@ socket_write_directly (rpc_transport_t* this)
 
 	return size;
 }
+
+
+static int
+socket_write_simultaneous (rpc_transport_t* this)
+{
+	socket_private_t* priv = NULL;
+	int max = 4;
+	int empty = 0;
+
+	priv = this->private;
+
+	while (max--)  {
+	        uv_mutex_lock (&priv->comm_lock);
+		empty = list_empty (&priv->write_q);
+        	uv_mutex_unlock (&priv->comm_lock);
+		if (!empty) {
+			socket_write_start (this);
+		}
+	}
+	return 0;
+}
+
 
 static struct action_req *
 socket_get_action (rpc_transport_t* this)
@@ -2904,7 +2907,7 @@ socket_do_handshake (rpc_transport_t* this)
 		uv_mutex_unlock (&priv->comm_lock);
 
 		if (write) {
-			socket_write_start (this);
+			socket_write_simultaneous (this);
 		}
 		else
 			socket_read_start (this);
@@ -2920,7 +2923,7 @@ static int
 socket_do_kill (rpc_transport_t* this)
 {
         socket_private_t* priv = NULL;
-	struct write_q* write_q = NULL, *n;
+	struct ioq* write_q = NULL, *n;
 
         priv = this->private;
 
@@ -2931,7 +2934,7 @@ socket_do_kill (rpc_transport_t* this)
 		list_del (write_q);
 		//-- pthread_mutex_lock (&priv->lock);
                 {
-                        __socket_ioq_entry_free (write_q->ioq);
+                        __socket_ioq_entry_free (write_q);
                 }
                 //-- pthread_mutex_unlock (&priv->lock);
 	}
@@ -2977,7 +2980,7 @@ socket_do_next (rpc_transport_t* this)
 
 #if 0
 	gf_log (this->name, GF_LOG_ERROR,
-                "ZZZZZZZZZZZZ:tid=%d,state=%d,rdstate=%d,wrstate=%d, wrc=%d, rdc=%d",
+                "ZZZZZZZZZZZZ:tid=%p,state=%d,rdstate=%d,wrstate=%d, wrc=%d, rdc=%d",
                 pthread_self (), priv->state, priv->rdstate, priv->wrstate,
                 priv->wrcount, priv->rdcount);
 #endif /* NEVER */
@@ -3001,6 +3004,7 @@ socket_do_next (rpc_transport_t* this)
                         break;
                 default:
                         GF_ASSERT (0 && "No this state");
+			new_state = S_DEAD;
                         break;
         }
 
@@ -3043,7 +3047,7 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 #if 0
         gf_msg (this->name, GF_LOG_ERROR, 0,
                 LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-                "READ: tid=%d, rdstate=%d, nread=%ld", pthread_self(),
+                "READ: tid=%p, rdstate=%d, nread=%ld", pthread_self(),
                 priv->rdstate, nread);
 #endif /* NEVER */
 
@@ -3055,8 +3059,8 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 		priv->rdstate = C_DONE;
 		uv_read_stop (&priv->handle);
 
-		for (;;) {
-			uv_mutex_lock (&priv->comm_lock);
+                for (;;) {
+                	uv_mutex_lock (&priv->comm_lock);
 			empty = list_empty (&priv->read_q);
 			uv_mutex_unlock (&priv->comm_lock);
 			if (!empty)
@@ -3093,7 +3097,7 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
                 gf_msg (this->name, GF_LOG_ERROR, 0,
                         LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                         "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm:nread=%d. "
-                        "orign=%d.readf=%d, tid=%d, addr=%p",
+                        "orign=%d.readf=%d, tid=%p, addr=%p",
                         nread, dd, bufq_get_size (&priv->read_q),
                         pthread_self (), bufq);
 
@@ -3131,7 +3135,7 @@ socket_write_cb (uv_write_t* req, int status)
         socket_private_t* priv = NULL;
         struct req_buf* req_buf = NULL;
         struct req_buf* next_req_buf = NULL;
-        struct write_q* write_q = NULL;
+        struct ioq* write_q = NULL;
         struct ioq* ioq = NULL;
         ssize_t len = 0;
 	int write_empty = 0;
@@ -3144,12 +3148,14 @@ socket_write_cb (uv_write_t* req, int status)
         req_buf = CONTAINER_OF (req, struct req_buf, req);
         priv = req_buf->priv;
         write_q = req_buf->data;
+#ifdef NEVER
         GF_FREE (req_buf);
+#else
+        iobuf_unref (req_buf->iobuf);
+#endif /* NEVER */
 
-        ioq = write_q->ioq;
+        ioq = write_q;
         this = priv->translator;
-
-        GF_ASSERT (priv->wrstate == C_BUSY);
 
         priv->result = status;
 	priv->wrcount = 0;
@@ -3304,7 +3310,7 @@ __socket_handle_init (uv_loop_t* loop, rpc_transport_t* this)
         };
         char* local_addr = NULL;
         gf_boolean_t ign_enoent = _gf_false;
-        int send_buff_size = 0, recv_buff_size = 0;
+        int send_buff_size = 256*1024, recv_buff_size = 256*1024;
         int ret = -1;
 
         priv = this->private;
@@ -3379,8 +3385,17 @@ __socket_handle_init (uv_loop_t* loop, rpc_transport_t* this)
                 ign_enoent = dict_get_str_boolean (
                   this->options, "transport.socket.ignore-enoent", _gf_false);
 
-                uv_send_buffer_size (&priv->handle, &send_buff_size);
-                uv_recv_buffer_size (&priv->handle, &recv_buff_size);
+                uv_send_buffer_size ((uv_handle_t *)&priv->handle, &send_buff_size);
+                uv_recv_buffer_size ((uv_handle_t *)&priv->handle, &recv_buff_size);
+		uv_tcp_nodelay (&priv->handle, 1);
+
+		send_buff_size = 0;
+		recv_buff_size = 0;
+		uv_send_buffer_size ((uv_handle_t *)&priv->handle, &send_buff_size);
+		uv_recv_buffer_size ((uv_handle_t *)&priv->handle, &recv_buff_size);
+                gf_log (this->name, GF_LOG_DEBUG,
+                        "set send and recv buffer size:%d,%d",
+                        send_buff_size, recv_buff_size);
 
 #ifdef ENABLE_BIND
                 ret = uv_tcp_bind (&sock->h.sock,
@@ -3503,9 +3518,9 @@ socket_register_handler (uv_loop_t* loop, void* translator, int action)
 
 	action_req = socket_get_action (this);
 	if (action_req) {
-#if 1
+#if 0
 	gf_log (this->name, GF_LOG_ERROR,
-		"Register:tid=%d,state=%d,rdstate=%d,wrstate=%d,req=%d",
+		"Register:tid=%p,state=%d,rdstate=%d,wrstate=%d,req=%d",
 		pthread_self (), priv->state, priv->rdstate, priv->wrstate, action_req->type);
 #endif /* NEVER */
 
@@ -3596,7 +3611,7 @@ socket_read_start (rpc_transport_t* this)
 		priv->rdcount++;
 
                 ret =
-                  uv_read_start (&priv->handle, on_buf_alloc, socket_read_cb);
+                  uv_read_start ((uv_stream_t *)&priv->handle, on_buf_alloc, socket_read_cb);
                 if (ret != 0) {
                         gf_log (this->name, GF_LOG_DEBUG,
                                 "failure on read:%p (%s)",
@@ -3630,7 +3645,7 @@ __socket_disconnect (rpc_transport_t* this)
 
         gf_msg (
           this->name, GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-          "disconnecting %p, state=%u gen=%u priv=%p, sock=%p, tid=%d", this,
+          "disconnecting %p, state=%u gen=%u priv=%p, sock=%p, tid=%p", this,
           priv->ot_state, priv->ot_gen, priv, &priv->handle, pthread_self ());
 
         priv->connected = -1;

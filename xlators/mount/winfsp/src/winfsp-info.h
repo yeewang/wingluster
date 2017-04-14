@@ -1,10 +1,12 @@
 #ifndef _GF_WINFSP_INFO_H_
 #define _GF_WINFSP_INFO_H_
 
-#include <fuse.h>
 #include "fuse-bridge.h"
+#include <fuse.h>
 
-#define INVALIDE_HANDLE          (-1)
+#define USE_IOBUF (1)
+
+#define INVALIDE_HANDLE (-1)
 
 typedef struct
 {
@@ -93,9 +95,9 @@ typedef struct
 
 typedef struct
 {
-        const char *path;
+        const char* path;
         mode_t mode;
-        struct fuse_file_info * fi;
+        struct fuse_file_info* fi;
 } winfsp_create_t;
 
 typedef struct
@@ -113,7 +115,7 @@ typedef struct
         off_t offset;
         struct fuse_file_info* fi;
 
-        pthread_cond_t  cond;
+        pthread_cond_t cond;
         pthread_mutex_t mutex;
         struct list_head list;
 
@@ -202,14 +204,14 @@ typedef struct
 
 typedef struct
 {
-        const char *path;
+        const char* path;
         off_t size;
-        struct fuse_file_info *fi;
+        struct fuse_file_info* fi;
 } winfsp_fallocate_t;
 
 typedef struct
 {
-        const char *path;
+        const char* path;
         int valid;
 
         struct timespec ts[2];
@@ -221,13 +223,13 @@ typedef struct
 
         off_t off;
 
-        struct fuse_file_info *fi;
+        struct fuse_file_info* fi;
 } winfsp_setattr_t;
 
 typedef struct
 {
-        const char *path;
-        struct fuse_file_info *fi;
+        const char* path;
+        struct fuse_file_info* fi;
         struct fuse_file_lock lk;
 } winfsp_setlk_t;
 
@@ -237,14 +239,11 @@ typedef struct
         char parent[250];
 } winfsp_directory_node;
 
-int
-winfsp_lookup_dir(uint64_t nodeid);
+int winfsp_lookup_dir (uint64_t nodeid);
 
-void
-winfsp_lookup(xlator_t* this, ino_t parent, char* bname);
+void winfsp_lookup (xlator_t* this, ino_t parent, char* bname);
 
-void* winfsp_mount_proc(void* data);
-
+void* winfsp_mount_proc (void* data);
 
 struct mount_data
 {
@@ -256,18 +255,15 @@ struct mount_data
         int status_fd;
 };
 
-int winfsp_send_result(xlator_t* this, winfsp_msg_t* msg, int ret);
-int winfsp_send_err(xlator_t* this, winfsp_msg_t* msg, int error);
-winfsp_msg_t* winfsp_get_req(int type, size_t size);
-void winfsp_send_req(winfsp_msg_t* msg);
-void winfsp_abort_req(winfsp_msg_t* msg);
-int winfsp_get_result(winfsp_msg_t* msg);
-int winfsp_get_result_and_cleanup(winfsp_msg_t* msg);
-void winfsp_cleanup_req(winfsp_msg_t* msg);
+int winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret);
+int winfsp_send_err (xlator_t* this, winfsp_msg_t* msg, int error);
+winfsp_msg_t* winfsp_get_req (xlator_t* this, int type, size_t size);
+void winfsp_send_req (winfsp_msg_t* msg);
+void winfsp_abort_req (winfsp_msg_t* msg);
+int winfsp_get_result (winfsp_msg_t* msg);
+int winfsp_get_result_and_cleanup (winfsp_msg_t* msg);
+void winfsp_cleanup_req (winfsp_msg_t* msg);
 
-void
-winfsp_perform_lookup(xlator_t *this, char *path, inode_table_t *itable);
-
+void winfsp_perform_lookup (xlator_t* this, char* path, inode_table_t* itable);
 
 #endif /* _GF_WINFSP_INFO_H_ */
-
