@@ -159,16 +159,9 @@ struct bufq
         size_t read;
 };
 
-struct write_q
-{
-	struct list_head list;
-        struct ioq* ioq;
-        uv_buf_t bufs[MAX_IOVEC];
-        int count;
-};
-
 struct req_buf
 {
+        struct iobuf *iobuf;
         void* priv;
         void* data;
         union

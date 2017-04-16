@@ -11,7 +11,11 @@ libglusterfs_la_CPPFLAGS = $(GF_CPPFLAGS) -D__USE_FILE_OFFSET64 \
 	-DSBIN_DIR=\"$(sbindir)\" -I$(CONTRIBDIR)/timer-wheel \
 	-I/usr/include/tirpc
 
-libglusterfs_la_LIBADD = $(ZLIB_LIBS) $(MATH_LIB) $(UUID_LIBS) -ltirpc -luv-1.9.1
+if GF_CYGWIN_HOST_OS
+libglusterfs_la_CPPFLAGS += -I$(top_builddir)/../smartheap/cygheap
+endif
+
+libglusterfs_la_LIBADD = $(ZLIB_LIBS) $(MATH_LIB) $(UUID_LIBS) -ltirpc -luv-1.9.1 -lsmartheap-0.1
 libglusterfs_la_LDFLAGS = -version-info $(LIBGLUSTERFS_LT_VERSION) -no-undefined
 #    -Wl,--out-implib=lib${module}.dll.a \
 #    -Wl,--export-all-symbols \

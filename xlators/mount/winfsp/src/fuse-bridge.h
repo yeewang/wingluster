@@ -54,7 +54,6 @@ struct fuse_private
         char* volfile;
         size_t volfile_size;
         char* mount_point;
-        struct iobuf* iobuf;
         void* outbuf;
 
         struct list_head directory;
@@ -234,7 +233,7 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
                                 finh->unique, finh->opcode);                   \
                                                                                \
                         winfsp_send_err (this, msg, ENOMEM);                   \
-                        GF_FREE (finh);                                        \
+                        SH_FREE (finh);                                        \
                                                                                \
                         return;                                                \
                 }                                                              \
@@ -258,7 +257,7 @@ typedef struct fuse_graph_switch_args fuse_graph_switch_args_t;
 #define INIT_FUSE_HEADER(_finh, _unique, _opcode, _ctx)                        \
         do {                                                                   \
                 const size_t msg0_size = sizeof (*_finh);                      \
-                (_finh) = GF_CALLOC (1, msg0_size, gf_fuse_mt_iov_base);       \
+                (_finh) = SH_CALLOC (1, msg0_size, gf_fuse_mt_iov_base);       \
                 (_finh)->len = msg0_size;                                      \
                 (_finh)->opcode = _opcode;                                     \
                 (_finh)->unique = _unique;                                     \
@@ -407,6 +406,7 @@ typedef struct
         loc_t loc2;
         fuse_in_header_t* finh;
         int32_t flags;
+        struct iobuf* iobuf;
         off_t off;
         size_t size;
         unsigned long nlookup;

@@ -44,6 +44,8 @@
 #include <rpc/xdr.h>
 #include <sys/ioctl.h>
 
+#define USE_IOBUF (1)
+
 #define GF_LOG_ERRNO(errno) ((errno == ENOTCONN) ? GF_LOG_DEBUG : GF_LOG_ERROR)
 #define SA(ptr) ((struct sockaddr*)ptr)
 
@@ -344,72 +346,6 @@ emit_socket_listen (rpc_transport_t* this)
         action_req->type = AR_SOCKET_LISTEN;
         action_req->args[0] = this;
         action_req->num_of_args = 1;
-
-        uv_mutex_lock (&priv->comm_lock);
-        {
-                list_add_tail (&action_req->list, &priv->action_q);
-        }
-        uv_mutex_unlock (&priv->comm_lock);
-
-        ret = 0;
-
-out:
-        return ret;
-}
-
-static int32_t
-emit_socket_submit_request (rpc_transport_t* this, struct ioq* entry)
-{
-        socket_private_t* priv = this->private;
-        struct action_req* action_req = NULL;
-        int ret = -1;
-
-        action_req =
-          GF_CALLOC (1, sizeof (struct action_req), gf_sock_mt_action_q);
-        if (action_req == NULL) {
-                gf_log (this->name, GF_LOG_ERROR,
-                        "failure on allocating action_req.");
-                goto out;
-        }
-
-        INIT_LIST_HEAD (&action_req->list);
-        action_req->type = AR_SOCKET_SUBMIT_REQUEST;
-        action_req->args[0] = this;
-        action_req->args[1] = entry;
-        action_req->num_of_args = 2;
-
-        uv_mutex_lock (&priv->comm_lock);
-        {
-                list_add_tail (&action_req->list, &priv->action_q);
-        }
-        uv_mutex_unlock (&priv->comm_lock);
-
-        ret = 0;
-
-out:
-        return ret;
-}
-
-static int32_t
-emit_socket_submit_reply (rpc_transport_t* this, struct ioq* entry)
-{
-        socket_private_t* priv = this->private;
-        struct action_req* action_req = NULL;
-        int ret = -1;
-
-        action_req =
-          GF_CALLOC (1, sizeof (struct action_req), gf_sock_mt_action_q);
-        if (action_req == NULL) {
-                gf_log (this->name, GF_LOG_ERROR,
-                        "failure on allocating action_req.");
-                goto out;
-        }
-
-        INIT_LIST_HEAD (&action_req->list);
-        action_req->type = AR_SOCKET_SUBMIT_REPLY;
-        action_req->args[0] = this;
-        action_req->args[1] = entry;
-        action_req->num_of_args = 2;
 
         uv_mutex_lock (&priv->comm_lock);
         {
@@ -1038,13 +974,22 @@ __socket_ioq_new (rpc_transport_t* this, rpc_transport_msg_t* msg)
         struct ioq* entry = NULL;
         int count = 0;
         uint32_t size = 0;
+        struct iobuf* iobuf = NULL;
 
         GF_VALIDATE_OR_GOTO ("socket", this, out);
 
         /* TODO: use mem-pool */
+#ifndef USE_IOBUF
         entry = GF_CALLOC (1, sizeof (*entry), gf_common_mt_ioq);
         if (!entry)
                 return NULL;
+#else
+        iobuf = iobuf_get2 (this->ctx->iobuf_pool, sizeof (*entry));
+        if (!iobuf)
+                return NULL;
+        entry = iobuf_ptr (iobuf);
+#endif /* USE_IOBUF */
+
 
         count = msg->rpchdrcount + msg->proghdrcount + msg->progpayloadcount;
 
@@ -1092,6 +1037,11 @@ __socket_ioq_new (rpc_transport_t* this, rpc_transport_msg_t* msg)
 
         if (msg->iobref != NULL)
                 entry->iobref = iobref_ref (msg->iobref);
+#ifdef USE_IOBUF
+        else
+                entry->iobref = iobref_new ();
+#endif /* USE_IOBUF */
+        iobref_add (entry->iobref, iobuf);
 
         INIT_LIST_HEAD (&entry->list);
 
@@ -1108,8 +1058,9 @@ __socket_ioq_entry_free (struct ioq* entry)
         if (entry->iobref)
                 iobref_unref (entry->iobref);
 
-        /* TODO: use mem-pool */
+#ifndef USE_IOBUF
         GF_FREE (entry);
+#endif /* USE_IOBUF */
 
 out:
         return;
@@ -1907,6 +1858,7 @@ __socket_read_reply (rpc_transport_t* this)
         char* buf = NULL;
         int32_t ret = -1;
         rpc_request_info_t* request_info = NULL;
+        struct iobuf* iobuf = NULL;
         char map_xid = 0;
         struct gf_sock_incoming* in = NULL;
         struct gf_sock_incoming_frag* frag = NULL;
@@ -1921,8 +1873,14 @@ __socket_read_reply (rpc_transport_t* this)
         buf = rpc_xid_addr (iobuf_ptr (in->iobuf));
 
         if (in->request_info == NULL) {
+#if 1
                 in->request_info = GF_CALLOC (1, sizeof (*request_info),
                                               gf_common_mt_rpc_trans_reqinfo_t);
+#else
+                iobuf = iobuf_get2 (this->ctx->iobuf_pool, sizeof (*request_info));
+                in->request_info = iobuf_ptr (iobuf);
+                in->request_info->iobuf = iobuf;
+#endif /* USE_IOBUF */
                 if (in->request_info == NULL) {
                         goto out;
                 }
@@ -2067,7 +2025,11 @@ __socket_reset_priv (socket_private_t* priv)
         }
 
         if (in->request_info != NULL) {
+#if 1
                 GF_FREE (in->request_info);
+#else
+                iobuf_unref (in->request_info->iobuf);
+#endif /* USE_IOBUF */
                 in->request_info = NULL;
         }
 
@@ -3053,30 +3015,29 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 
         bufq = (struct bufq*)(buf->base + buf->len);
 
-        if (nread <= 0) {
+        if (nread < 0) {
 		iobuf_unref (bufq->iobuf);
 
-		priv->rdstate = C_DONE;
-		uv_read_stop (&priv->handle);
+                if (nread == UV_EOF || nread == UV_ECONNRESET) {
+        		priv->rdstate = C_DONE;
+        		uv_read_stop (&priv->handle);
 
-                for (;;) {
-                	uv_mutex_lock (&priv->comm_lock);
-			empty = list_empty (&priv->read_q);
-			uv_mutex_unlock (&priv->comm_lock);
-			if (!empty)
-				socket_event_poll_in (this);
-			else
-				break;
-		}
+                        for (;;) {
+                        	uv_mutex_lock (&priv->comm_lock);
+        			empty = list_empty (&priv->read_q);
+        			uv_mutex_unlock (&priv->comm_lock);
+        			if (!empty)
+        				socket_event_poll_in (this);
+        			else
+        				break;
+        		}
+                }
+		else {
+                        socket_error_cb (this, ret);
 
-		if (nread != UV_EOF) {
-			socket_error_cb (this, ret);
-		}
-
-		socket_do_next (this);
-
-                gf_log (this->name, GF_LOG_DEBUG, "End of read from peer %s(%s)",
-                        this->peerinfo.identifier, uv_strerror (nread));
+                        gf_log (this->name, GF_LOG_DEBUG, "End of read from peer %s(%s)",
+                                this->peerinfo.identifier, uv_strerror (nread));
+                }
                 return;
         }
 

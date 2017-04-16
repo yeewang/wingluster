@@ -590,7 +590,7 @@ fuse_resolve_entry_init (fuse_state_t* state, fuse_resolve_t* resolve,
         parent = fuse_ino_to_inode (par, state->this);
         gf_uuid_copy (resolve->pargfid, parent->gfid);
         resolve->parhint = parent;
-        resolve->bname = gf_strdup (name);
+        resolve->bname = sh_strdup (name);
 
         return 0;
 }

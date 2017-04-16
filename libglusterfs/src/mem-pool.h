@@ -20,6 +20,9 @@
 #include <string.h>
 #include <stdarg.h>
 
+#include <cygheap.h>
+
+
 /*
  * Need this for unit tests since inline functions
  * access memory allocation and need to use the
@@ -156,6 +159,14 @@ void* __gf_default_realloc (void *oldptr, size_t size)
 
 #define GF_FREE(free_ptr) __gf_free (free_ptr)
 
+#define SH_CALLOC(nmemb, size, type) sh_calloc (nmemb, size)
+
+#define SH_MALLOC(size, type)  sh_malloc (size)
+
+#define SH_REALLOC(ptr, size)  sh_realloc (ptr, size)
+
+#define SH_FREE(free_ptr)  sh_free (free_ptr)
+
 static inline
 char *gf_strndup (const char *src, size_t len)
 {
@@ -207,6 +218,25 @@ gf_memdup (const void *src, size_t size)
 
 out:
         return dup_mem;
+}
+
+static inline
+char * sh_strdup (const char *src)
+{
+
+        char    *dup_str = NULL;
+        size_t  len = 0;
+
+        len = strlen (src) + 1;
+
+        dup_str = SH_CALLOC(1, len, gf_common_mt_strdup);
+
+        if (!dup_str)
+                return NULL;
+
+        memcpy (dup_str, src, len);
+
+        return dup_str;
 }
 
 struct mem_pool {

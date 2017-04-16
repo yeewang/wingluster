@@ -57,7 +57,7 @@ winfsp_lookup (xlator_t* this, ino_t parent, char* bname)
         params = (winfsp_lookup_t*)msg->args;
         params->this = this;
         params->parent = parent;
-        params->basename = gf_strdup (bname);
+        params->basename = sh_strdup (bname);
 
         winfsp_send_req (msg);
 }
@@ -379,38 +379,24 @@ winfsp_write (const char* path, const char* buf, size_t size, off_t offset,
         xlator_t* this = get_fuse_xlator ();
         winfsp_msg_t* msg = NULL;
         winfsp_write_t* params = NULL;
-        size_t n = 0;
-        size_t part = 0;
         int ret = -1;
 
-        while (n < size) {
-                if ((size - n) > this->ctx->page_size)
-                        part = this->ctx->page_size;
-                else
-                        part = size - n;
+        msg =
+          winfsp_get_req (THIS, FUSE_WRITE, sizeof (winfsp_write_t));
+        if (msg == NULL)
+                return -1;
 
-                msg =
-                  winfsp_get_req (THIS, FUSE_WRITE, sizeof (winfsp_write_t));
-                if (msg == NULL)
-                        return -1;
+        params = (winfsp_write_t*)msg->args;
+        params->path = path;
+        params->buf = buf;
+        params->size = size;
+        params->offset = offset;
+        params->fi = fi;
 
-                params = (winfsp_write_t*)msg->args;
-                params->path = path;
-                params->buf = buf + n;
-                params->size = part;
-                params->offset = offset + n;
-                params->fi = fi;
+        winfsp_send_req (msg);
+        ret = winfsp_get_result_and_cleanup (msg);
 
-                winfsp_send_req (msg);
-                ret = winfsp_get_result_and_cleanup (msg);
-
-                if (ret > 0)
-                        n += ret;
-                else
-                        break;
-        }
-
-        return (ret > 0) ? n : ret;
+        return size;
 }
 
 static int
@@ -635,7 +621,7 @@ winfsp_readdirp_ex (const char* path, void* buf, fuse_fill_dir_t filler,
                         if (part->off == part->size)
                                 end = 1;
 
-                        GF_FREE (part);
+                        SH_FREE (part);
                 }
         }
 
@@ -662,7 +648,7 @@ winfsp_readdirp_ex (const char* path, void* buf, fuse_fill_dir_t filler,
         }
 
         if (params->out_buf != NULL)
-                GF_FREE (params->out_buf);
+                SH_FREE (params->out_buf);
 
         winfsp_cleanup_req (msg);
 
@@ -754,7 +740,7 @@ winfsp_readdirp_cache (const char* path, fuse_cache_dirh_t* buf,
                         if (part->off == part->size)
                                 end = 1;
 
-                        GF_FREE(part);
+                        SH_FREE(part);
                 }
         }
 #endif
@@ -782,7 +768,7 @@ winfsp_readdirp_cache (const char* path, fuse_cache_dirh_t* buf,
         }
 
         if (params->out_buf != NULL)
-                GF_FREE (params->out_buf);
+                SH_FREE (params->out_buf);
 
         winfsp_cleanup_req (msg);
 
@@ -1220,7 +1206,7 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
                 if (msg->autorelease) {
 #ifndef USE_IOBUF
                         release_msg =
-                          GF_CALLOC (1, sizeof (winfsp_msg_t) +
+                          SH_CALLOC (1, sizeof (winfsp_msg_t) +
                                           sizeof (winfsp_autorelease_t),
                                      gf_fuse_mt_winfsp_msg_t);
                         if (release_msg == NULL)
@@ -1276,7 +1262,7 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
                                 if (inner_msg->unique == msg->unique) {
                                         list_del_init (&wait_msg->list);
 #ifndef USE_IOBUF
-                                        GF_FREE (wait_msg);
+                                        SH_FREE (wait_msg);
 #else
                                         iobuf_unref (wait_msg->iobuf);
 #endif /* USE_IOBUF */
@@ -1340,7 +1326,7 @@ winfsp_get_req (xlator_t* this, int type, size_t size)
         struct fuse_context* ctx = get_fuse_header_in ();
 
 #ifndef USE_IOBUF
-        msg = GF_CALLOC (1, sizeof (winfsp_msg_t) + size, gf_common_mt_char);
+        msg = SH_CALLOC (1, sizeof (winfsp_msg_t) + size, gf_common_mt_char);
         if (msg == NULL)
                 return NULL;
 #else
@@ -1436,7 +1422,7 @@ winfsp_abort_req (winfsp_msg_t* msg)
                         if (inner_msg->unique == msg->unique) {
                                 list_del_init (&wait_msg->list);
 #ifndef USE_IOBUF
-                                GF_FREE (wait_msg);
+                                SH_FREE (wait_msg);
 #else
                                 iobuf_unref (wait_msg->iobuf);
 #endif /* USE_IOBUF */
@@ -1500,7 +1486,7 @@ winfsp_get_result_and_cleanup (winfsp_msg_t* msg)
         pthread_cond_destroy (&msg->cond);
 
 #ifndef USE_IOBUF
-        GF_FREE (msg);
+        SH_FREE (msg);
 #else
         iobuf_unref (msg->iobuf);
 #endif /* USE_IOBUF */
@@ -1517,7 +1503,7 @@ winfsp_cleanup_req (winfsp_msg_t* msg)
         pthread_cond_destroy (&msg->cond);
 
 #ifndef USE_IOBUF
-        GF_FREE (msg);
+        SH_FREE (msg);
 #else
         iobuf_unref (msg->iobuf);
 #endif /* USE_IOBUF */

@@ -12,9 +12,9 @@
 static void
 fuse_resolve_wipe (fuse_resolve_t* resolve)
 {
-        GF_FREE ((void*)resolve->path);
+        SH_FREE ((void*)resolve->path);
 
-        GF_FREE ((void*)resolve->bname);
+        SH_FREE ((void*)resolve->bname);
 
         if (resolve->fd)
                 fd_unref (resolve->fd);
@@ -56,7 +56,7 @@ free_fuse_state (fuse_state_t* state)
                 dict_unref (state->xattr);
 
         if (state->name) {
-                GF_FREE (state->name);
+                SH_FREE (state->name);
                 state->name = NULL;
         }
         if (state->fd) {
@@ -64,7 +64,7 @@ free_fuse_state (fuse_state_t* state)
                 state->fd = (void*)0xfdfdfdfd;
         }
         if (state->finh) {
-                GF_FREE (state->finh);
+                SH_FREE (state->finh);
                 state->finh = NULL;
         }
 
@@ -86,7 +86,7 @@ free_fuse_state (fuse_state_t* state)
 #ifdef DEBUG
         memset (state, 0x90, sizeof (*state));
 #endif
-        GF_FREE (state);
+        SH_FREE (state);
         state = NULL;
 }
 
@@ -97,7 +97,7 @@ get_fuse_state (xlator_t* this, fuse_in_header_t* finh)
         xlator_t* active_subvol = NULL;
         fuse_private_t* priv = NULL;
 
-        state = (void*)GF_CALLOC (1, sizeof (*state), gf_fuse_mt_fuse_state_t);
+        state = (void*)SH_CALLOC (1, sizeof (*state), gf_fuse_mt_fuse_state_t);
         if (!state)
                 return NULL;
 
@@ -479,7 +479,7 @@ fail:
         /* this should not happen as inode_path returns -1 when buf is NULL
            for sure */
         if (path && !loc->path)
-                GF_FREE (path);
+                SH_FREE (path);
         return ret;
 }
 
@@ -597,7 +597,7 @@ fuse_do_flip_xattr_ns (char* okey, const char* nns, char** nkey)
         GF_ASSERT (okey);
 
         key =
-          GF_CALLOC (1, strlen (nns) + strlen (okey) + 1, gf_common_mt_char);
+          SH_CALLOC (1, strlen (nns) + strlen (okey) + 1, gf_common_mt_char);
         if (!key) {
                 ret = -1;
                 goto out;
@@ -617,7 +617,7 @@ fuse_xattr_alloc_default (char* okey, char** nkey)
 {
         int ret = 0;
 
-        *nkey = gf_strdup (okey);
+        *nkey = sh_strdup (okey);
         if (!*nkey)
                 ret = -1;
         return ret;
@@ -773,12 +773,12 @@ split_pathname (char* pathname, char** path, char** basename)
 {
         char* p;
 
-        *path = gf_strdup (pathname);
+        *path = sh_strdup (pathname);
         if (*path == NULL)
                 goto fail_out;
 
         p = strrchr (*path, '/');
-        *basename = gf_strdup (p + 1);
+        *basename = sh_strdup (p + 1);
         if (*basename == NULL)
                 goto fail_out;
 
@@ -792,9 +792,9 @@ split_pathname (char* pathname, char** path, char** basename)
 
 fail_out:
         if (*path)
-                GF_FREE (*path);
+                SH_FREE (*path);
         if (*basename)
-                GF_FREE (*basename);
+                SH_FREE (*basename);
 
         return -1;
 }
@@ -817,7 +817,7 @@ fuse_inode_from_path2 (xlator_t* this, char* path, inode_table_t* itable)
         };
         char* tmp_path = NULL;
 
-        tmp_path = gf_strdup (path);
+        tmp_path = sh_strdup (path);
         if (!tmp_path) {
                 goto out;
         }
@@ -885,7 +885,7 @@ fuse_inode_from_path2 (xlator_t* this, char* path, inode_table_t* itable)
 out:
         inode_ref (linked_inode);
         loc_wipe (&loc);
-        GF_FREE (tmp_path);
+        SH_FREE (tmp_path);
 
         return linked_inode;
 }
