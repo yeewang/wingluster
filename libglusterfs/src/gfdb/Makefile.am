@@ -6,7 +6,7 @@ libgfdb_la_CPPFLAGS = $(GF_CPPFLAGS) -D__USE_FILE_OFFSET64 -fpic \
   -DDATADIR=\"$(localstatedir)\"
 
 if GF_CYGWIN_HOST_OS
-libglusterfs_la_CPPFLAGS += -I$(top_builddir)/../smartheap/cygheap
+libgfdb_la_CPPFLAGS += -I$(top_builddir)/../smartheap/cygheap
 endif
 
 libgfdb_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la \
