@@ -2270,13 +2270,6 @@ fuse_open (xlator_t* this, winfsp_msg_t* msg)
         fuse_resolve_and_resume (state, fuse_open_resume);
 }
 
-typedef struct
-{
-        void* buf;
-        int buf_len;
-        int size;
-} fuse_stub_readv_t;
-
 static int
 fuse_readv_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                 int32_t op_ret, int32_t op_errno, struct iovec* vector,
@@ -2490,7 +2483,7 @@ fuse_write (xlator_t* this, winfsp_msg_t* msg)
 
         state->vector.iov_base = iobuf_ptr (iobuf);
         state->vector.iov_len = args->size;
-        memcpy (iobuf_ptr(iobuf), args->buf, args->size);
+        memcpy (iobuf_ptr (iobuf), args->buf, args->size);
 
         fuse_resolve_and_resume (state, fuse_write_resume);
 
@@ -4990,6 +4983,61 @@ fuse_waitmsg (xlator_t* this, winfsp_msg_t* msg)
         gf_log (this->name, GF_LOG_DEBUG, "waitmsg unique: %d", msg->unique);
 }
 
+static struct work_tbl
+{
+        int type;
+        int order;        /* logical order */
+        int num_of_works; /* how many works can be executed. */
+} work_tbl[] = {
+        { 0, 0, 0 },
+        { FUSE_LOOKUP, 50, 1 },   /* = 1 */
+        { FUSE_FORGET, 1, 1 },    /* = 2, no reply */
+        { FUSE_GETATTR, 40, 4 },  /* = 3 */
+        { FUSE_SETATTR, 40, 4 },  /* = 4 */
+        { FUSE_READLINK, 20, 4 }, /* = 5 */
+        { FUSE_SYMLINK, 20, 4 },  /* = 6 */
+        { 7, 0, 0 },
+        { FUSE_MKNOD, 30, 4 },  /* = 8 */
+        { FUSE_MKDIR, 30, 1 },  /* = 9 */
+        { FUSE_UNLINK, 30, 1 }, /* = 10 */
+        { FUSE_RMDIR, 30, 1 },  /* = 11 */
+        { FUSE_RENAME, 30, 1 }, /* = 12 */
+        { FUSE_LINK, 30, 1 },   /* = 13 */
+        { FUSE_OPEN, 40, 4 },   /* = 14 */
+        { FUSE_READ, 1, 8 },    /* = 15 */
+        { FUSE_WRITE, 1, 8 },   /* = 16 */
+        { FUSE_STATFS, 98, 1 }, /* = 17 */
+        { FUSE_RELEASE, 1, 1 }, /* = 18 */
+        { 19, 0, 0 },
+        { FUSE_FSYNC, 10, 4 },       /* = 20 */
+        { FUSE_SETXATTR, 1, 4 },     /* = 21 */
+        { FUSE_GETXATTR, 1, 4 },     /* = 22 */
+        { FUSE_LISTXATTR, 1, 4 },    /* = 23 */
+        { FUSE_REMOVEXATTR, 1, 4 },  /* = 24 */
+        { FUSE_FLUSH, 20, 1 },       /* = 25 */
+        { FUSE_INIT, 99, 1 },        /* = 26 */
+        { FUSE_OPENDIR, 10, 1 },     /* = 27 */
+        { FUSE_READDIR, 10, 1 },     /* = 28 */
+        { FUSE_RELEASEDIR, 1, 1 },   /* = 29 */
+        { FUSE_FSYNCDIR, 20, 1 },    /* = 30 */
+        { FUSE_GETLK, 1, 1 },        /* = 31 */
+        { FUSE_SETLK, 1, 1 },        /* = 32 */
+        { FUSE_SETLKW, 1, 1 },       /* = 33 */
+        { FUSE_ACCESS, 40, 1 },      /* = 34 */
+        { FUSE_CREATE, 40, 1 },      /* = 35 */
+        { FUSE_INTERRUPT, 1, 1 },    /* = 36 */
+        { FUSE_BMAP, 1, 1 },         /* = 37 */
+        { FUSE_DESTROY, 1, 1 },      /* = 38 */
+        { FUSE_IOCTL, 1, 1 },        /* = 39 */
+        { FUSE_POLL, 1, 1 },         /* = 40 */
+        { FUSE_NOTIFY_REPLY, 1, 1 }, /* = 41 */
+        { FUSE_BATCH_FORGET, 1, 1 }, /* = 42 */
+        { FUSE_FALLOCATE, 1, 1 },    /* = 43 */
+        { FUSE_READDIRPLUS, 49, 1 }, /* = 44 */
+        { FUSE_AUTORELEASE, 1, 1 },
+        { FUSE_WAITMSG, 1, 1 },
+};
+
 static int
 list_count (struct list_head* head)
 {
@@ -4998,6 +5046,58 @@ list_count (struct list_head* head)
 
         list_for_each (node, head) { count++; }
         return count;
+}
+
+static int
+msg_can_work (fuse_private_t* priv, int type)
+{
+        winfsp_msg_t* entry = NULL;
+        winfsp_waitmsg_t* waitmsg = NULL;
+        int order = 0;
+        int count = 0;
+        int ret = 0;
+
+        list_for_each_entry (entry, &priv->wait_list, list)
+        {
+                waitmsg = (winfsp_waitmsg_t*)entry->args;
+
+                if (work_tbl[waitmsg->msg->type].order > order)
+                        order = work_tbl[waitmsg->msg->type].order;
+
+                if (waitmsg->msg->type == type) {
+                        count++;
+                }
+        }
+
+        if (count < work_tbl[type].num_of_works &&
+            order <= work_tbl[type].order) {
+                ret = 1;
+        }
+
+        return ret;
+}
+
+static winfsp_msg_t*
+get_next_msg (fuse_private_t* priv)
+{
+        winfsp_msg_t *entry = NULL, *n = NULL;
+
+        if (list_count (&priv->wait_list) > 8)
+                return NULL;
+
+        list_for_each_entry (n, &priv->msg_list, list)
+        {
+                if (n->type < FUSE_OP_HIGH) {
+                        if (msg_can_work (priv, n->type)) {
+                                list_del_init (n);
+
+                                entry = n;
+                        }
+                }
+                break;
+        }
+
+        return entry;
 }
 
 static void*
@@ -5026,8 +5126,7 @@ fuse_thread_proc (void* data)
                 pthread_mutex_lock (&priv->msg_mutex);
                 {
 
-                        while (list_empty (&priv->msg_list) ||
-                               list_count (&priv->wait_list) > 0) {
+                        while ((msg = get_next_msg (priv)) == NULL) {
 
 #if 0
                                 winfsp_msg_t* tt;
@@ -5057,10 +5156,6 @@ fuse_thread_proc (void* data)
                                         break;
                                 }
                         }
-
-                        msg = list_first_entry (&priv->msg_list, winfsp_msg_t,
-                                                list);
-                        list_del_init (&msg->list);
 
                         if (msg->type != FUSE_AUTORELEASE &&
                             msg->type != FUSE_FORGET &&
@@ -5102,10 +5197,12 @@ fuse_thread_proc (void* data)
 
                 winfsp_opendir_t* args = (winfsp_opendir_t*)msg->args;
 
-                gf_msg (this->name, GF_LOG_DEBUG, 0,
+#ifdef DEBUG
+                gf_msg (this->name, GF_LOG_INFO, 0,
                         LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                         "fuse recieved message type: %d, unique: %lu, path: %s",
                         msg->type, msg->unique, args->path);
+#endif /* DEBUG */
 
                 if (msg->type >= FUSE_OP_HIGH)
                         fuse_enosys (this, msg);

@@ -2987,7 +2987,10 @@ socket_error_cb (rpc_transport_t* this, int status)
                 "disconnecting now:status=%d, fd=%p, %s", status, &priv->handle,
                 uv_strerror (status));
         socket_event_poll_err (this);
+
+        /* rpc_transport will never quit.
         rpc_transport_unref (this);
+        */
 }
 
 static void
@@ -3016,7 +3019,8 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
         bufq = (struct bufq*)(buf->base + buf->len);
 
         if (nread < 0) {
-		iobuf_unref (bufq->iobuf);
+                if (buf->base != NULL)
+		        iobuf_unref (bufq->iobuf);
 
                 if (nread == UV_EOF || nread == UV_ECONNRESET) {
         		priv->rdstate = C_DONE;
@@ -3038,6 +3042,12 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
                         gf_log (this->name, GF_LOG_DEBUG, "End of read from peer %s(%s)",
                                 this->peerinfo.identifier, uv_strerror (nread));
                 }
+
+#ifdef DEBUG
+                gf_log (this->name, GF_LOG_INFO, "NO-Data read: %s(%s)",
+                        this->peerinfo.identifier, uv_strerror (nread));
+#endif /* DEBUG */
+
                 return;
         }
 
@@ -3066,8 +3076,6 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
                         __asm__("int $3");
                 }
 #endif /* NEVER */
-
-		//uv_cond_signal (&priv->comm_cond);
         }
         uv_mutex_unlock (&priv->comm_lock);
 
@@ -3249,7 +3257,7 @@ socket_close (rpc_transport_t* this)
         priv->handle.data = priv;
 
 	if (uv_is_closing (&priv->handle))
-		__asm ("int $3");
+		return;
 
         uv_close (&priv->handle, socket_close_cb);
         uv_timer_again (&priv->timer);
