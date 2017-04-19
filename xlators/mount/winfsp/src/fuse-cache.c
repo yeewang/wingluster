@@ -44,8 +44,6 @@ static struct cache cache;
 struct node
 {
         struct stat stat;
-        // time_t stat_valid;
-        int stat_is_valid;
         char** dir;
         time_t dir_valid;
         char* link;
@@ -120,14 +118,36 @@ cache_purge_parent (const char* path)
         }
 }
 
+static void
+cache_dirty_parent (const char* path)
+{
+        struct node* node = NULL;
+        const char* s = strrchr (path, '/');
+        if (s) {
+                if (s == path)
+                        node = cache_lookup ("/");
+                else {
+                        char* parent = g_strndup (path, s - path);
+                        node = cache_lookup (parent);
+                        g_free (parent);
+                }
+
+                if (node) {
+                        node->dir_valid  = 0;
+                }
+        }
+}
+
 void
-cache_invalidate (const char* path)
+cache_invalidate (const char* path, int dirty_parent)
 {
         if (!cache.on)
                 return;
 
         pthread_mutex_lock (&cache.lock);
         cache_purge (path);
+        if (dirty_parent)
+                cache_dirty_parent (path);
         pthread_mutex_unlock (&cache.lock);
 }
 
@@ -139,28 +159,6 @@ cache_invalidate_write (const char* path)
         cache_purge(path);
         */
         cache.write_ctr++;
-        pthread_mutex_unlock (&cache.lock);
-}
-
-static void
-cache_invalidate_dir_0 (const char* path)
-{
-        pthread_mutex_lock (&cache.lock);
-        cache_purge (path);
-
-        /* round over cache bug. */
-        if (strrchr (path, '/') == path) {
-                cache_purge_parent (path);
-        }
-        pthread_mutex_unlock (&cache.lock);
-}
-
-static void
-cache_invalidate_dir (const char* path)
-{
-        pthread_mutex_lock (&cache.lock);
-        cache_purge (path);
-        cache_purge_parent (path);
         pthread_mutex_unlock (&cache.lock);
 }
 
@@ -180,10 +178,8 @@ cache_do_rename (const char* from, const char* to)
         pthread_mutex_lock (&cache.lock);
         g_hash_table_foreach_remove (cache.table, (GHRFunc)cache_del_children,
                                      (char*)from);
-        cache_purge (from);
-        cache_purge (to);
-        cache_purge_parent (from);
-        cache_purge_parent (to);
+        cache_invalidate (from, 1);
+        cache_invalidate (to, 1);
         pthread_mutex_unlock (&cache.lock);
 }
 
@@ -194,7 +190,6 @@ cache_get (const char* path)
         if (node == NULL) {
                 char* pathcopy = g_strdup (path);
                 node = g_new0 (struct node, 1);
-                node->stat_is_valid = 0;
                 g_hash_table_insert (cache.table, pathcopy, node);
         }
         return node;
@@ -212,7 +207,6 @@ cache_add_attr (const char* path, const struct stat* stbuf, uint64_t wrctr)
         if (wrctr == cache.write_ctr) {
                 node = cache_get (path);
                 node->stat = *stbuf;
-                node->stat_is_valid = 1;
                 time_t stat_valid = time (NULL) + cache.stat_timeout_secs;
                 if (stat_valid > node->valid)
                         node->valid = stat_valid;
@@ -270,7 +264,8 @@ cache_get_attr (const char* path, struct stat* stbuf)
         pthread_mutex_lock (&cache.lock);
         node = cache_lookup (path);
         if (node != NULL) {
-                if (node->stat_is_valid) {
+                time_t now = time (NULL);
+                if (node->valid - now >= 0) {
                         *stbuf = node->stat;
                         err = 0;
                 }
@@ -406,7 +401,7 @@ cache_mknod (const char* path, mode_t mode, dev_t rdev)
 {
         int err = cache.next_oper->oper.mknod (path, mode, rdev);
         if (!err)
-                cache_invalidate_dir (path);
+                cache_invalidate (path, 1);
         return err;
 }
 
@@ -415,7 +410,7 @@ cache_mkdir (const char* path, mode_t mode)
 {
         int err = cache.next_oper->oper.mkdir (path, mode);
         if (!err)
-                cache_invalidate_dir (path);
+                cache_invalidate (path, 1);
         return err;
 }
 
@@ -424,7 +419,7 @@ cache_unlink (const char* path)
 {
         int err = cache.next_oper->oper.unlink (path);
         if (!err)
-                cache_invalidate_dir (path);
+                cache_invalidate (path, 1);
         return err;
 }
 
@@ -433,7 +428,7 @@ cache_rmdir (const char* path)
 {
         int err = cache.next_oper->oper.rmdir (path);
         if (!err)
-                cache_invalidate_dir (path);
+                cache_invalidate (path, 1);
         return err;
 }
 
@@ -442,7 +437,7 @@ cache_symlink (const char* from, const char* to)
 {
         int err = cache.next_oper->oper.symlink (from, to);
         if (!err)
-                cache_invalidate_dir (to);
+                cache_invalidate (to, 1);
         return err;
 }
 
@@ -460,8 +455,8 @@ cache_link (const char* from, const char* to)
 {
         int err = cache.next_oper->oper.link (from, to);
         if (!err) {
-                cache_invalidate (from);
-                cache_invalidate_dir (to);
+                cache_invalidate (from, 1);
+                cache_invalidate (to, 1);
         }
         return err;
 }
@@ -471,7 +466,7 @@ cache_chmod (const char* path, mode_t mode)
 {
         int err = cache.next_oper->oper.chmod (path, mode);
         if (!err)
-                cache_invalidate (path);
+                cache_invalidate (path, 0);
         return err;
 }
 
@@ -480,7 +475,7 @@ cache_chown (const char* path, uid_t uid, gid_t gid)
 {
         int err = cache.next_oper->oper.chown (path, uid, gid);
         if (!err)
-                cache_invalidate (path);
+                cache_invalidate (path, 0);
         return err;
 }
 
@@ -489,7 +484,7 @@ cache_truncate (const char* path, off_t size)
 {
         int err = cache.next_oper->oper.truncate (path, size);
         if (!err)
-                cache_invalidate (path);
+                cache_invalidate (path, 0);
         return err;
 }
 
@@ -498,7 +493,7 @@ cache_utime (const char* path, struct utimbuf* buf)
 {
         int err = cache.next_oper->oper.utime (path, buf);
         if (!err)
-                cache_invalidate (path);
+                cache_invalidate (path, 0);
         return err;
 }
 
@@ -517,7 +512,7 @@ cache_release (const char* path, struct fuse_file_info* fi)
 {
         int err = cache.next_oper->oper.release (path, fi);
         if (!err)
-                cache_invalidate (path);
+                cache_invalidate (path, 0);
         return err;
 }
 
@@ -527,7 +522,7 @@ cache_create (const char* path, mode_t mode, struct fuse_file_info* fi)
 {
         int err = cache.next_oper->oper.create (path, mode, fi);
         if (!err)
-                cache_invalidate_dir (path);
+                cache_invalidate (path, 1);
         return err;
 }
 
@@ -536,7 +531,7 @@ cache_ftruncate (const char* path, off_t size, struct fuse_file_info* fi)
 {
         int err = cache.next_oper->oper.ftruncate (path, size, fi);
         if (!err)
-                cache_invalidate (path);
+                cache_invalidate (path, 0);
         return err;
 }
 

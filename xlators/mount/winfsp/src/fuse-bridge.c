@@ -420,15 +420,17 @@ fuse_entry_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
         } else {
                 gf_log ("glusterfs-fuse",
                         (op_errno == ENOENT ? GF_LOG_TRACE : GF_LOG_WARNING),
-                        "%" PRIu64 ": %s() %s => -1 (%s)", frame->root->unique,
-                        gf_fop_list[frame->root->op], state->loc.path,
+                        "%" PRIu64 ": %s() %s => %d (%s)", frame->root->unique,
+                        gf_fop_list[frame->root->op], state->loc.path, op_errno,
                         strerror (op_errno));
 
-                if ((op_errno == ENOENT) && (priv->negative_timeout != 0)) {
-                        feop->entry_valid =
-                          calc_timeout_sec (priv->negative_timeout);
-                        feop->entry_valid_nsec =
-                          calc_timeout_nsec (priv->negative_timeout);
+                if ((op_errno == ENOENT) || (op_errno == EEXIST)) {
+                        if (priv->negative_timeout != 0) {
+                                feop->entry_valid =
+                                  calc_timeout_sec (priv->negative_timeout);
+                                feop->entry_valid_nsec =
+                                  calc_timeout_nsec (priv->negative_timeout);
+                        }
 
                         winfsp_send_result (this, stub, 0);
                 } else {
@@ -1224,9 +1226,9 @@ fuse_unlink_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                         gf_log (
                           "glusterfs-fuse",
                           op_errno == ENOTEMPTY ? GF_LOG_DEBUG : GF_LOG_WARNING,
-                          "%" PRIu64 ": %s() %s => -1 (%s)",
+                          "%" PRIu64 ": %s() %s => %d (%s)",
                           frame->root->unique, gf_fop_list[frame->root->op],
-                          state->loc.path, strerror (op_errno));
+                          state->loc.path, op_errno, strerror (op_errno));
                 }
                 winfsp_send_err (this, state->stub, op_errno);
         }
@@ -1892,7 +1894,7 @@ fuse_rename (xlator_t* this, winfsp_msg_t* msg)
         fuse_resolve_and_resume (state, fuse_rename_resume);
 
 out:
-        SH_FREE (gfpath);
+        GF_FREE (gfpath);
         SH_FREE (name);
         SH_FREE (path);
         SH_FREE (newname);
@@ -4983,12 +4985,12 @@ fuse_waitmsg (xlator_t* this, winfsp_msg_t* msg)
         gf_log (this->name, GF_LOG_DEBUG, "waitmsg unique: %d", msg->unique);
 }
 
-static struct work_tbl
+static struct fuse_work_tbl
 {
         int type;
         int order;        /* logical order */
         int num_of_works; /* how many works can be executed. */
-} work_tbl[] = {
+} fuse_work_tbl[] = {
         { 0, 0, 0 },
         { FUSE_LOOKUP, 50, 1 },   /* = 1 */
         { FUSE_FORGET, 1, 1 },    /* = 2, no reply */
@@ -5003,11 +5005,11 @@ static struct work_tbl
         { FUSE_RMDIR, 30, 1 },  /* = 11 */
         { FUSE_RENAME, 30, 1 }, /* = 12 */
         { FUSE_LINK, 30, 1 },   /* = 13 */
-        { FUSE_OPEN, 40, 4 },   /* = 14 */
+        { FUSE_OPEN, 40, 8 },   /* = 14 */
         { FUSE_READ, 1, 8 },    /* = 15 */
         { FUSE_WRITE, 1, 8 },   /* = 16 */
         { FUSE_STATFS, 98, 1 }, /* = 17 */
-        { FUSE_RELEASE, 1, 1 }, /* = 18 */
+        { FUSE_RELEASE, 1, 8 }, /* = 18 */
         { 19, 0, 0 },
         { FUSE_FSYNC, 10, 4 },       /* = 20 */
         { FUSE_SETXATTR, 1, 4 },     /* = 21 */
@@ -5033,8 +5035,8 @@ static struct work_tbl
         { FUSE_NOTIFY_REPLY, 1, 1 }, /* = 41 */
         { FUSE_BATCH_FORGET, 1, 1 }, /* = 42 */
         { FUSE_FALLOCATE, 1, 1 },    /* = 43 */
-        { FUSE_READDIRPLUS, 49, 1 }, /* = 44 */
-        { FUSE_AUTORELEASE, 1, 1 },
+        { FUSE_READDIRPLUS, 1, 4 }, /* = 44 */
+        { FUSE_AUTORELEASE, 0, 1000 },
         { FUSE_WAITMSG, 1, 1 },
 };
 
@@ -5061,16 +5063,16 @@ msg_can_work (fuse_private_t* priv, int type)
         {
                 waitmsg = (winfsp_waitmsg_t*)entry->args;
 
-                if (work_tbl[waitmsg->msg->type].order > order)
-                        order = work_tbl[waitmsg->msg->type].order;
+                if (fuse_work_tbl[waitmsg->msg->type].order > order)
+                        order = fuse_work_tbl[waitmsg->msg->type].order;
 
                 if (waitmsg->msg->type == type) {
                         count++;
                 }
         }
 
-        if (count < work_tbl[type].num_of_works &&
-            order <= work_tbl[type].order) {
+        if (count < fuse_work_tbl[type].num_of_works &&
+            order <= fuse_work_tbl[type].order) {
                 ret = 1;
         }
 
@@ -5082,7 +5084,7 @@ get_next_msg (fuse_private_t* priv)
 {
         winfsp_msg_t *entry = NULL, *n = NULL;
 
-        if (list_count (&priv->wait_list) > 8)
+        if (list_count (&priv->wait_list) > 64)
                 return NULL;
 
         list_for_each_entry (n, &priv->msg_list, list)
@@ -5195,13 +5197,24 @@ fuse_thread_proc (void* data)
                 }
                 pthread_mutex_unlock (&priv->msg_mutex);
 
-                winfsp_opendir_t* args = (winfsp_opendir_t*)msg->args;
-
 #ifdef DEBUG
-                gf_msg (this->name, GF_LOG_INFO, 0,
-                        LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-                        "fuse recieved message type: %d, unique: %lu, path: %s",
-                        msg->type, msg->unique, args->path);
+
+                if (msg->type == FUSE_LOOKUP) {
+                        winfsp_lookup_t* args = (winfsp_lookup_t*)msg->args;
+                        gf_msg (this->name, GF_LOG_INFO, 0,
+                                LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+                                "fuse recieved message type: %d, unique: %lu, "
+                                "parent: %" PRIu64 ", path: %s",
+                                msg->type, msg->unique, args->parent,
+                                args->basename);
+                } else {
+                        winfsp_opendir_t* args = (winfsp_opendir_t*)msg->args;
+                        gf_msg (this->name, GF_LOG_INFO, 0,
+                                LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+                                "fuse recieved message type: %d, unique: %lu, "
+                                "path: %s",
+                                msg->type, msg->unique, args->path);
+                }
 #endif /* DEBUG */
 
                 if (msg->type >= FUSE_OP_HIGH)

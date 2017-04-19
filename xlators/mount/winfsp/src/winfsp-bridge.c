@@ -1443,7 +1443,7 @@ winfsp_get_result (winfsp_msg_t* msg)
                 while (!msg->fin) {
                         ret = pthread_cond_wait (&msg->cond, &msg->mutex);
                         if (ret != 0) {
-                                gf_log ("fuse-bridage", GF_LOG_DEBUG,
+                                gf_log ("fuse-bridage", GF_LOG_WARNING,
                                         "timedwait returned non zero value "
                                         "ret: %d errno: %d",
                                         ret, errno);
@@ -1469,7 +1469,7 @@ winfsp_get_result_and_cleanup (winfsp_msg_t* msg)
                 while (!msg->fin) {
                         ret = pthread_cond_wait (&msg->cond, &msg->mutex);
                         if (ret != 0) {
-                                gf_log ("fuse-bridage", GF_LOG_DEBUG,
+                                gf_log ("fuse-bridage", GF_LOG_WARNING,
                                         "timedwait returned non zero value "
                                         "ret: %d errno: %d",
                                         ret, errno);
