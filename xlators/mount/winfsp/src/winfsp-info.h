@@ -115,8 +115,8 @@ typedef struct
         off_t offset;
         struct fuse_file_info* fi;
 
-        pthread_cond_t cond;
-        pthread_mutex_t mutex;
+        uv_cond_t cond;
+        uv_mutex_t mutex;
         struct list_head list;
 
         char* out_buf;

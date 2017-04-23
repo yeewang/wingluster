@@ -29,7 +29,8 @@ AM_CPPFLAGS = $(GF_CPPFLAGS) $(GF_FUSE_CFLAGS) -DCYGFUSE \
     -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -lglib-2.0 \
 	-I$(top_srcdir)/libglusterfs/src -I$(CONTRIBDIR)/fuse-include \
 	-I$(CONTRIBDIR)/winfsp \
-	-D_FILE_OFFSET_BITS=64 -L$(winfsp_dir)/opt/cygfuse -lfuse-2.8
+	-D_FILE_OFFSET_BITS=64 -L$(winfsp_dir)/opt/cygfuse -lfuse-2.8 \
+	-I$(top_builddir)/../cyguv/libuv/include
 
 AM_CFLAGS = -Wall $(GF_CFLAGS) $(GF_FUSE_CFLAGS) -DCYGFUSE \
 	-I$(CONTRIBDIR)/fuse-include \

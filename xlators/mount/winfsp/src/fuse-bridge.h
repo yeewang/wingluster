@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <sys/mount.h>
 #include <sys/time.h>
+#include <uv.h>
 
 #ifndef _CONFIG_H
 #define _CONFIG_H
@@ -54,9 +55,13 @@ struct fuse_private
         char* volfile;
         size_t volfile_size;
         char* mount_point;
-        void* outbuf;
 
-        struct list_head directory;
+        struct {
+                struct iobuf* iobuf;
+                uint64_t handle;
+                size_t offset;
+                size_t size;
+        } write_cache;
 
         pthread_t fuse_thread;
         pthread_t mount_thread;
@@ -70,14 +75,14 @@ struct fuse_private
         double negative_timeout;
         double attribute_timeout;
 
-        pthread_cond_t sync_cond;
-        pthread_mutex_t sync_mutex;
+        uv_cond_t sync_cond;
+        uv_mutex_t sync_mutex;
         char event_recvd;
 
         char init_recvd;
 
-        pthread_cond_t msg_cond;
-        pthread_mutex_t msg_mutex;
+        uv_cond_t msg_cond;
+        uv_mutex_t msg_mutex;
         struct list_head msg_list;
         struct list_head wait_list;
 
@@ -85,7 +90,7 @@ struct fuse_private
 
         fuse_handler_t** fuse_ops;
         fuse_handler_t** fuse_ops0;
-        pthread_mutex_t fuse_dump_mutex;
+        uv_mutex_t fuse_dump_mutex;
         int fuse_dump_fd;
 
         glusterfs_graph_t* next_graph;
@@ -114,8 +119,8 @@ struct fuse_private
 
         /* For fuse-reverse-validation */
         struct list_head invalidate_list;
-        pthread_cond_t invalidate_cond;
-        pthread_mutex_t invalidate_mutex;
+        uv_cond_t invalidate_cond;
+        uv_mutex_t invalidate_mutex;
         gf_boolean_t reverse_fuse_thread_started;
 
         /* For communicating with separate mount thread. */
@@ -384,9 +389,10 @@ typedef struct
 typedef struct winfsp_msg
 {
         struct list_head list;
-        pthread_cond_t cond;
-        pthread_mutex_t mutex;
+        uv_cond_t cond;
+        uv_mutex_t mutex;
         struct iobuf* iobuf;
+        int error_count;
         int type;
         uint64_t unique;
         gf_boolean_t autorelease;

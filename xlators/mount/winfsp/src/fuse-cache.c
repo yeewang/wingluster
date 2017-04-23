@@ -14,8 +14,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uv.h>
+#include "list.h"
 
 #define DEFAULT_CACHE_TIMEOUT_SECS 20
+#define DEFAULT_CACHE_EMPTY_TIMEOUT_SECS 5
 #define DEFAULT_CACHE_STAT_TIMEOUT_SECS (5 * 60)
 #define DEFAULT_CACHE_DIR_TIMEOUT_SECS 60
 #define DEFAULT_CACHE_LINK_TIMEOUT_SECS 20
@@ -26,6 +29,7 @@
 struct cache
 {
         int on;
+        unsigned int empty_timeout_secs;
         unsigned int stat_timeout_secs;
         unsigned int dir_timeout_secs;
         unsigned int link_timeout_secs;
@@ -34,7 +38,7 @@ struct cache
         unsigned int min_clean_interval_secs;
         struct fuse_cache_operations* next_oper;
         GHashTable* table;
-        pthread_mutex_t lock;
+        uv_mutex_t lock;
         time_t last_cleaned;
         uint64_t write_ctr;
 };
@@ -49,6 +53,7 @@ struct node
         char* link;
         time_t link_valid;
         time_t valid;
+        int nullpath;
 };
 
 struct fuse_cache_dirhandle
@@ -59,6 +64,32 @@ struct fuse_cache_dirhandle
         GPtrArray* dir;
         uint64_t wrctr;
 };
+
+/* refresh list */
+
+#ifdef NEVER
+#ifndef CONTAINER_OF
+#define CONTAINER_OF(ptr, type, field)                                         \
+        ((type*)((char*)(ptr) - ((char*)&((type*)0)->field)))
+#endif
+
+typedef enum refresh_type {
+        RT_dir,
+        RT_attr,
+} refresh_type_t;
+
+struct cache_refresh_node {
+        list_head list;
+        char* path;
+        refresh_type_t type;
+};
+
+static struct list_head cache_refresh_list;
+uv_cond_t cache_refresh_cond;
+uv_mutex_t cache_refresh_lock;
+#endif /* NEVER */
+
+/* end of refresh list */
 
 static void
 free_node (gpointer node_)
@@ -138,28 +169,62 @@ cache_dirty_parent (const char* path)
         }
 }
 
+static void
+cache_touch_parent (const char* path)
+{
+        struct node* node = NULL;
+        const char* s = strrchr (path, '/');
+        if (s) {
+                if (s == path)
+                        node = cache_lookup ("/");
+                else {
+                        char* parent = g_strndup (path, s - path);
+                        node = cache_lookup (parent);
+                        g_free (parent);
+                }
+
+                if (node) {
+                        struct timespec now;
+                        clock_gettime (CLOCK_REALTIME, &now);
+                        node->stat.st_mtim = now;
+                        node->stat.st_atim = now;
+                }
+        }
+}
+
 void
 cache_invalidate (const char* path, int dirty_parent)
 {
         if (!cache.on)
                 return;
 
-        pthread_mutex_lock (&cache.lock);
+        uv_mutex_lock (&cache.lock);
         cache_purge (path);
         if (dirty_parent)
-                cache_dirty_parent (path);
-        pthread_mutex_unlock (&cache.lock);
+                cache_touch_parent (path);
+        uv_mutex_unlock (&cache.lock);
+}
+
+static void
+cache_invalidate_parent (const char* path)
+{
+        if (!cache.on)
+                return;
+
+        uv_mutex_lock (&cache.lock);
+        cache_dirty_parent (path);
+        uv_mutex_unlock (&cache.lock);
 }
 
 void
 cache_invalidate_write (const char* path)
 {
-        pthread_mutex_lock (&cache.lock);
+        uv_mutex_lock (&cache.lock);
         /* save the stat when writing.
         cache_purge(path);
         */
         cache.write_ctr++;
-        pthread_mutex_unlock (&cache.lock);
+        uv_mutex_unlock (&cache.lock);
 }
 
 static int
@@ -175,12 +240,12 @@ cache_del_children (const char* key, void* val_, const char* path)
 static void
 cache_do_rename (const char* from, const char* to)
 {
-        pthread_mutex_lock (&cache.lock);
+        uv_mutex_lock (&cache.lock);
         g_hash_table_foreach_remove (cache.table, (GHRFunc)cache_del_children,
                                      (char*)from);
         cache_invalidate (from, 1);
         cache_invalidate (to, 1);
-        pthread_mutex_unlock (&cache.lock);
+        uv_mutex_unlock (&cache.lock);
 }
 
 static struct node*
@@ -203,7 +268,7 @@ cache_add_attr (const char* path, const struct stat* stbuf, uint64_t wrctr)
         if (!cache.on)
                 return;
 
-        pthread_mutex_lock (&cache.lock);
+        uv_mutex_lock (&cache.lock);
         if (wrctr == cache.write_ctr) {
                 node = cache_get (path);
                 node->stat = *stbuf;
@@ -212,7 +277,7 @@ cache_add_attr (const char* path, const struct stat* stbuf, uint64_t wrctr)
                         node->valid = stat_valid;
                 cache_clean ();
         }
-        pthread_mutex_unlock (&cache.lock);
+        uv_mutex_unlock (&cache.lock);
 }
 
 static void
@@ -220,7 +285,7 @@ cache_add_dir (const char* path, char** dir)
 {
         struct node* node;
 
-        pthread_mutex_lock (&cache.lock);
+        uv_mutex_lock (&cache.lock);
         node = cache_get (path);
         g_strfreev (node->dir);
         node->dir = dir;
@@ -228,7 +293,7 @@ cache_add_dir (const char* path, char** dir)
         if (node->dir_valid > node->valid)
                 node->valid = node->dir_valid;
         cache_clean ();
-        pthread_mutex_unlock (&cache.lock);
+        uv_mutex_unlock (&cache.lock);
 }
 
 static size_t
@@ -245,7 +310,7 @@ cache_add_link (const char* path, const char* link, size_t size)
 {
         struct node* node;
 
-        pthread_mutex_lock (&cache.lock);
+        uv_mutex_lock (&cache.lock);
         node = cache_get (path);
         g_free (node->link);
         node->link = g_strndup (link, my_strnlen (link, size - 1));
@@ -253,7 +318,21 @@ cache_add_link (const char* path, const char* link, size_t size)
         if (node->link_valid > node->valid)
                 node->valid = node->link_valid;
         cache_clean ();
-        pthread_mutex_unlock (&cache.lock);
+        uv_mutex_unlock (&cache.lock);
+}
+
+static void
+cache_add_nullpath (const char* path)
+{
+        struct node* node;
+
+        uv_mutex_lock (&cache.lock);
+        node = cache_get (path);
+        node->nullpath = 1;
+        time_t stat_valid = time (NULL) + cache.empty_timeout_secs;
+        if (stat_valid > node->valid)
+                node->valid = stat_valid;
+        uv_mutex_unlock (&cache.lock);
 }
 
 static int
@@ -261,16 +340,20 @@ cache_get_attr (const char* path, struct stat* stbuf)
 {
         struct node* node;
         int err = -EAGAIN;
-        pthread_mutex_lock (&cache.lock);
+        uv_mutex_lock (&cache.lock);
         node = cache_lookup (path);
         if (node != NULL) {
                 time_t now = time (NULL);
                 if (node->valid - now >= 0) {
-                        *stbuf = node->stat;
-                        err = 0;
+                        if (!node->nullpath) {
+                                *stbuf = node->stat;
+                                err = 0;
+                        } else {
+                                err = -ENOENT;
+                        }
                 }
         }
-        pthread_mutex_unlock (&cache.lock);
+        uv_mutex_unlock (&cache.lock);
         return err;
 }
 
@@ -279,9 +362,9 @@ cache_get_write_ctr (void)
 {
         uint64_t res;
 
-        pthread_mutex_lock (&cache.lock);
+        uv_mutex_lock (&cache.lock);
         res = cache.write_ctr;
-        pthread_mutex_unlock (&cache.lock);
+        uv_mutex_unlock (&cache.lock);
 
         return res;
 }
@@ -290,12 +373,20 @@ static int
 cache_getattr (const char* path, struct stat* stbuf)
 {
         int err = cache_get_attr (path, stbuf);
-        if (err || stbuf->st_size == 0) { // BUGBUG: gluster bug
-                uint64_t wrctr = cache_get_write_ctr ();
-                err = cache.next_oper->oper.getattr (path, stbuf);
-                if (!err)
-                        cache_add_attr (path, stbuf, wrctr);
+        if (err == -ENOENT)
+                return err;
+
+        if (!err && stbuf->st_size != 0) // BUGBUG: gluster bug
+                return err;
+
+        uint64_t wrctr = cache_get_write_ctr ();
+        err = cache.next_oper->oper.getattr (path, stbuf);
+        if (err == -ENOENT) {
+                cache_add_nullpath (path);
         }
+        else if (!err)
+                cache_add_attr (path, stbuf, wrctr);
+
         return err;
 }
 
@@ -305,18 +396,18 @@ cache_readlink (const char* path, char* buf, size_t size)
         struct node* node;
         int err;
 
-        pthread_mutex_lock (&cache.lock);
+        uv_mutex_lock (&cache.lock);
         node = cache_lookup (path);
         if (node != NULL) {
                 time_t now = time (NULL);
                 if (node->link_valid - now >= 0) {
                         strncpy (buf, node->link, size - 1);
                         buf[size - 1] = '\0';
-                        pthread_mutex_unlock (&cache.lock);
+                        uv_mutex_unlock (&cache.lock);
                         return 0;
                 }
         }
-        pthread_mutex_unlock (&cache.lock);
+        uv_mutex_unlock (&cache.lock);
         err = cache.next_oper->oper.readlink (path, buf, size);
         if (!err)
                 cache_add_link (path, buf, size);
@@ -350,18 +441,27 @@ cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
         char** dir;
         struct node* node;
 
-        pthread_mutex_lock (&cache.lock);
+        uv_mutex_lock (&cache.lock);
         node = cache_lookup (path);
         if (node != NULL && node->dir != NULL) {
                 time_t now = time (NULL);
                 if (node->dir_valid - now >= 0) {
-                        for (dir = node->dir; *dir != NULL; dir++)
-                                filler (h, *dir, 0, 0);
-                        pthread_mutex_unlock (&cache.lock);
+                        const char* basepath = !path[1] ? "" : path;
+                        for (dir = node->dir; *dir != NULL; dir++) {
+                                struct node* subnode;
+                                char* fullpath;
+                                fullpath = g_strdup_printf ("%s/%s", basepath, *dir);
+                                subnode = cache_lookup (fullpath);
+                                if (subnode && !subnode->nullpath) {
+                                        filler (h, *dir, 0, 0);
+                                }
+                                g_free (fullpath);
+                        }
+                        uv_mutex_unlock (&cache.lock);
                         return 0;
                 }
         }
-        pthread_mutex_unlock (&cache.lock);
+        uv_mutex_unlock (&cache.lock);
 
         ch.path = path;
         ch.h = h;
@@ -409,7 +509,7 @@ static int
 cache_mkdir (const char* path, mode_t mode)
 {
         int err = cache.next_oper->oper.mkdir (path, mode);
-        if (!err)
+        if (!err || err == EEXIST)
                 cache_invalidate (path, 1);
         return err;
 }
@@ -492,8 +592,10 @@ static int
 cache_utime (const char* path, struct utimbuf* buf)
 {
         int err = cache.next_oper->oper.utime (path, buf);
+#if 0
         if (!err)
                 cache_invalidate (path, 0);
+#endif /* NEVER */
         return err;
 }
 
@@ -511,8 +613,17 @@ static int
 cache_release (const char* path, struct fuse_file_info* fi)
 {
         int err = cache.next_oper->oper.release (path, fi);
+#if 0
         if (!err)
                 cache_invalidate (path, 0);
+#endif /* NEVER */
+        return err;
+}
+
+static int
+cache_statfs (const char *path, struct fuse_statvfs *stbuf)
+{
+        int err = cache.next_oper->oper.statfs (path, stbuf);
         return err;
 }
 
@@ -548,6 +659,81 @@ cache_fgetattr (const char* path, struct stat* stbuf, struct fuse_file_info* fi)
         return err;
 }
 #endif
+
+#ifdef NEVER
+static int
+fill_cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
+{
+        struct fuse_cache_dirhandle ch;
+        int err;
+        char** dir;
+
+        ch.path = path;
+        ch.h = h;
+        ch.filler = filler;
+        ch.dir = g_ptr_array_new ();
+        ch.wrctr = cache_get_write_ctr ();
+        err = cache.next_oper->cache_getdir (path, &ch, cache_dirfill);
+        g_ptr_array_add (ch.dir, NULL);
+        dir = (char**)ch.dir->pdata;
+        if (!err)
+                cache_add_dir (path, dir);
+        else
+                g_strfreev (dir);
+        g_ptr_array_free (ch.dir, FALSE);
+        return err;
+}
+
+static int
+cache_node_compare (struct list_head *a, struct list_head *b)
+{
+        struct cache_refresh_node* ra =
+                CONTAINER_OF (a, struct cache_refresh_node, list);
+        struct cache_refresh_node* rb =
+                CONTAINER_OF (b, struct cache_refresh_node, list);
+
+        return 0;
+}
+
+static void
+cache_node_changed (struct node* node)
+{
+        struct cache_refresh_node* r =
+                SH_CALLOC (1, sizeof (struct cache_refresh_node), 0);
+        if (r == NULL)
+                return;
+
+        list_order (&r->list, cache_refresh_list);
+
+        uv_cond_signal ();
+}
+
+static void *
+cache_update_proc ()
+{
+        struct cache_refresh_node* r = NULL;
+
+        for (;;) {
+                while (list_empty (cache_refresh_list)) {
+                        uv_cond_wait ();
+                }
+
+                list_for_each_entry (r, cache_refresh_list, list) {
+                        break;
+                }
+
+                switch (r->type) {
+                case RT_attr:
+
+                        break;
+
+                case RT_dir:
+                        fill_cache_getdir (r->path);
+                        break;
+                }
+        }
+}
+#endif /* NEVER */
 
 static void
 cache_unity_fill (struct fuse_cache_operations* oper,
@@ -590,7 +776,7 @@ cache_unity_fill (struct fuse_cache_operations* oper,
 #endif
 #if FUSE_VERSION >= 29
         cache_oper->flag_nullpath_ok = oper->oper.flag_nullpath_ok;
-        cache_oper->flag_nopath = oper->oper.flag_nopath;
+        cache_oper->flag_nopath = oper->oper.flag_nopath;ddde
 #endif
 }
 
@@ -615,6 +801,7 @@ cache_fill (struct fuse_cache_operations* oper,
         cache_oper->utime = oper->oper.utime ? cache_utime : NULL;
         cache_oper->write = oper->oper.write ? cache_write : NULL;
         cache_oper->release = oper->oper.release ? cache_release : NULL;
+        cache_oper->statfs = oper->oper.statfs ? cache_statfs : NULL;
 #if FUSE_VERSION >= 25
         cache_oper->create = oper->oper.create ? cache_create : NULL;
         cache_oper->ftruncate = oper->oper.ftruncate ? cache_ftruncate : NULL;
@@ -635,7 +822,7 @@ cache_init (struct fuse_cache_operations* oper)
         cache_unity_fill (oper, &cache_oper);
         if (cache.on) {
                 cache_fill (oper, &cache_oper);
-                pthread_mutex_init (&cache.lock, NULL);
+                uv_mutex_init (&cache.lock);
                 cache.table = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                      g_free, free_node);
                 if (cache.table == NULL) {
@@ -665,6 +852,7 @@ static const struct fuse_opt cache_opts[] =
 int
 cache_parse_options (struct fuse_args* args)
 {
+        cache.empty_timeout_secs = DEFAULT_CACHE_EMPTY_TIMEOUT_SECS;
         cache.stat_timeout_secs = DEFAULT_CACHE_STAT_TIMEOUT_SECS;
         cache.dir_timeout_secs = DEFAULT_CACHE_DIR_TIMEOUT_SECS;
         cache.link_timeout_secs = DEFAULT_CACHE_LINK_TIMEOUT_SECS;

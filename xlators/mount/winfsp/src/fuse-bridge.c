@@ -175,12 +175,12 @@ fuse_invalidate_entry (xlator_t* this, uint64_t fuse_ino)
                 node->parent = inode_to_fuse_nodeid (dentry->parent);
                 strcpy (node->name, dentry->name);
 
-                pthread_mutex_lock (&priv->invalidate_mutex);
+                uv_mutex_lock (&priv->invalidate_mutex);
                 {
                         list_add_tail (&node->next, &priv->invalidate_list);
-                        pthread_cond_signal (&priv->invalidate_cond);
+                        uv_cond_signal (&priv->invalidate_cond);
                 }
-                pthread_mutex_unlock (&priv->invalidate_mutex);
+                uv_mutex_unlock (&priv->invalidate_mutex);
 
                 gf_log ("glusterfs-fuse", GF_LOG_TRACE, "INVALIDATE entry: "
                                                         "%" PRIu64 "/%s",
@@ -231,12 +231,12 @@ fuse_invalidate_inode (xlator_t* this, uint64_t fuse_ino)
 
         inode = fuse_ino_to_inode (fuse_ino, this);
 
-        pthread_mutex_lock (&priv->invalidate_mutex);
+        uv_mutex_lock (&priv->invalidate_mutex);
         {
                 list_add_tail (&node->next, &priv->invalidate_list);
-                pthread_cond_signal (&priv->invalidate_cond);
+                uv_cond_signal (&priv->invalidate_cond);
         }
-        pthread_mutex_unlock (&priv->invalidate_mutex);
+        uv_mutex_unlock (&priv->invalidate_mutex);
 
         gf_log ("glusterfs-fuse", GF_LOG_TRACE, "INVALIDATE inode: %" PRIu64,
                 fuse_ino);
@@ -2492,6 +2492,50 @@ fuse_write (xlator_t* this, winfsp_msg_t* msg)
         return;
 }
 
+
+static void
+fuse_write_ex (xlator_t* this, winfsp_msg_t* msg, struct iobuf* iobuf)
+{
+        winfsp_write_t* args = (winfsp_write_t*)msg->args;
+        fuse_in_header_t* finh = msg->finh;
+        fuse_state_t* state = NULL;
+        fd_t* fd = NULL;
+        fuse_private_t* priv = NULL;
+
+        priv = this->private;
+
+        FILL_STATE (msg, this, finh, NULL, state);
+
+        state->stub = msg;
+
+        fd = FH_TO_FD (args->fi->fh);
+        state->fd = fd;
+        state->size = args->size;
+        state->off = args->offset;
+        state->iobuf = iobuf;
+
+        /* convert FUSE_WRITE_LOCKOWNER, etc ? */
+        state->io_flags = FUSE_WRITE_CACHE;
+
+        /* TODO: may need to handle below flag
+           (fwi->write_flags & FUSE_WRITE_CACHE);
+        */
+
+        fuse_resolve_fd_init (state, &state->resolve, fd);
+
+        /*
+        if (args->fi->flags & FUSE_WRITE_LOCKOWNER)
+                state->lk_owner = args->fi->lock_owner;
+        */
+
+        state->vector.iov_base = iobuf_ptr (iobuf);
+        state->vector.iov_len = args->size;
+
+        fuse_resolve_and_resume (state, fuse_write_resume);
+
+        return;
+}
+
 void
 fuse_flush_resume (fuse_state_t* state)
 {
@@ -2996,7 +3040,7 @@ fuse_readdirp_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
         next_entry:
 
                 /* Make a callback to filter */
-                pthread_mutex_lock (&rd_stub->mutex);
+                uv_mutex_lock (&rd_stub->mutex);
                 {
                         winfsp_readdirp_item_t* msg =
                           (winfsp_readdirp_item_t*)SH_CALLOC (
@@ -3007,9 +3051,9 @@ fuse_readdirp_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                                         "%" PRIu64 ": READDIRP => -1 (%s)",
                                         frame->root->unique, strerror (ENOMEM));
 
-                                pthread_cond_broadcast (&rd_stub->cond);
+                                uv_cond_broadcast (&rd_stub->cond);
 
-                                pthread_mutex_unlock (&rd_stub->mutex);
+                                uv_mutex_unlock (&rd_stub->mutex);
 
                                 winfsp_send_err (this, stub, ENOMEM);
                                 goto out;
@@ -3022,10 +3066,10 @@ fuse_readdirp_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                         list_add_tail (&msg->list, &rd_stub->list);
 
                         if (count % 10 == 0) {
-                                pthread_cond_broadcast (&rd_stub->cond);
+                                uv_cond_broadcast (&rd_stub->cond);
                         }
                 }
-                pthread_mutex_unlock (&rd_stub->mutex);
+                uv_mutex_unlock (&rd_stub->mutex);
 
                 count++;
 
@@ -3036,11 +3080,11 @@ fuse_readdirp_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
         rd_stub->out_size = max_size;
 
         if (count % 10) {
-                pthread_mutex_lock (&rd_stub->mutex);
+                uv_mutex_lock (&rd_stub->mutex);
                 {
-                        pthread_cond_broadcast (&rd_stub->cond);
+                        uv_cond_broadcast (&rd_stub->cond);
                 }
-                pthread_mutex_unlock (&rd_stub->mutex);
+                uv_mutex_unlock (&rd_stub->mutex);
         }
 
         winfsp_send_result (this, stub, 0);
@@ -4196,10 +4240,10 @@ notify_kernel_loop (void* data)
         priv = this->private;
 
         for (;;) {
-                pthread_mutex_lock (&priv->invalidate_mutex);
+                uv_mutex_lock (&priv->invalidate_mutex);
                 {
                         while (list_empty (&priv->invalidate_list))
-                                pthread_cond_wait (&priv->invalidate_cond,
+                                uv_cond_wait (&priv->invalidate_cond,
                                                    &priv->invalidate_mutex);
 
                         node = list_entry (priv->invalidate_list.next,
@@ -4207,7 +4251,7 @@ notify_kernel_loop (void* data)
 
                         list_del_init (&node->next);
                 }
-                pthread_mutex_unlock (&priv->invalidate_mutex);
+                uv_mutex_unlock (&priv->invalidate_mutex);
 
                 SH_FREE (node);
         }
@@ -4215,7 +4259,7 @@ notify_kernel_loop (void* data)
         gf_log ("glusterfs-fuse", GF_LOG_ERROR,
                 "kernel notifier loop terminated");
 
-        pthread_mutex_lock (&priv->invalidate_mutex);
+        uv_mutex_lock (&priv->invalidate_mutex);
         {
                 priv->reverse_fuse_thread_started = _gf_false;
                 list_for_each_entry_safe (node, tmp, &priv->invalidate_list,
@@ -4225,7 +4269,7 @@ notify_kernel_loop (void* data)
                         SH_FREE (node);
                 }
         }
-        pthread_mutex_unlock (&priv->invalidate_mutex);
+        uv_mutex_unlock (&priv->invalidate_mutex);
 
         return NULL;
 }
@@ -4283,8 +4327,8 @@ fuse_enosys (xlator_t* this, winfsp_msg_t* msg)
 
 struct fuse_first_lookup
 {
-        pthread_mutex_t mutex;
-        pthread_cond_t cond;
+        uv_mutex_t mutex;
+        uv_cond_t cond;
         char fin;
 };
 
@@ -4308,12 +4352,12 @@ fuse_first_lookup_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                         "first lookup on root failed.");
         }
 
-        pthread_mutex_lock (&stub->mutex);
+        uv_mutex_lock (&stub->mutex);
         {
                 stub->fin = 1;
-                pthread_cond_broadcast (&stub->cond);
+                uv_cond_broadcast (&stub->cond);
         }
-        pthread_mutex_unlock (&stub->mutex);
+        uv_mutex_unlock (&stub->mutex);
 
         return 0;
 }
@@ -4351,8 +4395,8 @@ fuse_first_lookup (xlator_t* this)
 
         xl = priv->active_subvol;
 
-        pthread_mutex_init (&stub.mutex, NULL);
-        pthread_cond_init (&stub.cond, NULL);
+        uv_mutex_init (&stub.mutex);
+        uv_cond_init (&stub.cond);
         stub.fin = 0;
 
         frame->local = &stub;
@@ -4366,17 +4410,17 @@ fuse_first_lookup (xlator_t* this)
                 STACK_WIND (frame, fuse_first_lookup_cbk, xl, xl->fops->lookup,
                             &loc, dict);
 
-                pthread_mutex_lock (&stub.mutex);
+                uv_mutex_lock (&stub.mutex);
                 {
                         while (!stub.fin) {
-                                pthread_cond_wait (&stub.cond, &stub.mutex);
+                                uv_cond_wait (&stub.cond, &stub.mutex);
                         }
                 }
-                pthread_mutex_unlock (&stub.mutex);
+                uv_mutex_unlock (&stub.mutex);
         }
 
-        pthread_mutex_destroy (&stub.mutex);
-        pthread_cond_destroy (&stub.cond);
+        uv_mutex_destroy (&stub.mutex);
+        uv_cond_destroy (&stub.cond);
 
         frame->local = NULL;
         STACK_DESTROY (frame->root);
@@ -4904,7 +4948,7 @@ fuse_graph_sync (xlator_t* this)
 
         priv = this->private;
 
-        pthread_mutex_lock (&priv->sync_mutex);
+        uv_mutex_lock (&priv->sync_mutex);
         {
                 if (!priv->next_graph)
                         goto unlock;
@@ -4915,19 +4959,12 @@ fuse_graph_sync (xlator_t* this)
                 need_first_lookup = 1;
 
                 while (!priv->event_recvd) {
-                        ret = pthread_cond_wait (&priv->sync_cond,
-                                                 &priv->sync_mutex);
-                        if (ret != 0) {
-                                gf_log (this->name, GF_LOG_DEBUG,
-                                        "timedwait returned non zero value "
-                                        "ret: %d errno: %d",
-                                        ret, errno);
-                                break;
-                        }
+                        uv_cond_wait (&priv->sync_cond,
+                                      &priv->sync_mutex);
                 }
         }
 unlock:
-        pthread_mutex_unlock (&priv->sync_mutex);
+        uv_mutex_unlock (&priv->sync_mutex);
 
         if (need_first_lookup) {
                 fuse_first_lookup (this);
@@ -4936,12 +4973,12 @@ unlock:
         if ((old_subvol != NULL) && (new_subvol != NULL)) {
                 fuse_handle_graph_switch (this, old_subvol, new_subvol);
 
-                pthread_mutex_lock (&priv->sync_mutex);
+                uv_mutex_lock (&priv->sync_mutex);
                 {
                         old_subvol->switched = 1;
                         winds_on_old_subvol = old_subvol->winds;
                 }
-                pthread_mutex_unlock (&priv->sync_mutex);
+                uv_mutex_unlock (&priv->sync_mutex);
 
                 if (winds_on_old_subvol == 0) {
                         xlator_notify (old_subvol, GF_EVENT_PARENT_DOWN,
@@ -5102,6 +5139,35 @@ get_next_msg (fuse_private_t* priv)
         return entry;
 }
 
+static void
+fuse_flush_write_cache (xlator_t* this)
+{
+        fuse_private_t* priv = NULL;
+        winfsp_msg_t* write_msg = NULL;
+        winfsp_write_t* params = NULL;
+        struct fuse_file_info fi;
+
+        priv = this->private;
+
+        write_msg =
+          winfsp_get_req (THIS, FUSE_WRITE, sizeof (winfsp_write_t));
+        if (write_msg == NULL)
+                return;
+
+        write_msg->autorelease = _gf_true;
+        params = (winfsp_write_t*)write_msg->args;
+        params->path = NULL;
+        params->buf = NULL;
+        params->size = priv->write_cache.size;
+        params->offset = priv->write_cache.offset;
+        params->fi = &fi;
+        params->fi->fh = priv->write_cache.handle;
+
+        fuse_write_ex (this, write_msg, priv->write_cache.iobuf);
+        iobuf_unref (priv->write_cache.iobuf);
+        priv->write_cache.iobuf = NULL;
+}
+
 static void*
 fuse_thread_proc (void* data)
 {
@@ -5125,7 +5191,7 @@ fuse_thread_proc (void* data)
                 if (priv->init_recvd)
                         fuse_graph_sync (this);
 
-                pthread_mutex_lock (&priv->msg_mutex);
+                uv_mutex_lock (&priv->msg_mutex);
                 {
 
                         while ((msg = get_next_msg (priv)) == NULL) {
@@ -5147,17 +5213,11 @@ fuse_thread_proc (void* data)
                                 }
 #endif /* DEBUG */
 
-                                ret = pthread_cond_wait (&priv->msg_cond,
-                                                         &priv->msg_mutex);
-                                if (ret != 0) {
-                                        gf_log (
-                                          this->name, GF_LOG_DEBUG,
-                                          "timedwait returned non zero value "
-                                          "ret: %d errno: %d",
-                                          ret, errno);
-                                        break;
-                                }
+                                uv_cond_timedwait (&priv->msg_cond,
+                                                   &priv->msg_mutex, 60000);
                         }
+
+
 
                         if (msg->type != FUSE_AUTORELEASE &&
                             msg->type != FUSE_FORGET &&
@@ -5179,7 +5239,7 @@ fuse_thread_proc (void* data)
 #endif /* USE_IOBUF */
 
                                 if (waitmsg == NULL) {
-                                        pthread_mutex_unlock (&priv->msg_mutex);
+                                        uv_mutex_unlock (&priv->msg_mutex);
                                         goto cleanup_exit;
                                 }
                                 INIT_LIST_HEAD (&waitmsg->list);
@@ -5195,7 +5255,7 @@ fuse_thread_proc (void* data)
                                                &priv->wait_list);
                         }
                 }
-                pthread_mutex_unlock (&priv->msg_mutex);
+                uv_mutex_unlock (&priv->msg_mutex);
 
 #ifdef DEBUG
 
@@ -5207,6 +5267,22 @@ fuse_thread_proc (void* data)
                                 "parent: %" PRIu64 ", path: %s",
                                 msg->type, msg->unique, args->parent,
                                 args->basename);
+                } if (msg->type == FUSE_READ) {
+                        winfsp_read_t* args = (winfsp_read_t*)msg->args;
+                        gf_msg (this->name, GF_LOG_INFO, 0,
+                                LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+                                "fuse recieved message type: %d, unique: %lu, "
+                                "path: %s, size: %lld. offset: %lld",
+                                msg->type, msg->unique, args->path,
+                                args->size, args->offset);
+                }  if (msg->type == FUSE_WRITE) {
+                        winfsp_write_t* args = (winfsp_write_t*)msg->args;
+                        gf_msg (this->name, GF_LOG_INFO, 0,
+                                LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+                                "fuse recieved message type: %d, unique: %lu, "
+                                "path: %s, size: %lld. offset: %lld",
+                                msg->type, msg->unique, args->path,
+                                args->size, args->offset);
                 } else {
                         winfsp_opendir_t* args = (winfsp_opendir_t*)msg->args;
                         gf_msg (this->name, GF_LOG_INFO, 0,
@@ -5219,7 +5295,51 @@ fuse_thread_proc (void* data)
 
                 if (msg->type >= FUSE_OP_HIGH)
                         fuse_enosys (this, msg);
-                else {
+                else if (msg->type == FUSE_WRITE) {
+                        winfsp_write_t* args = (winfsp_write_t*)msg->args;
+
+                        if (priv->write_cache.iobuf == NULL) {
+                                priv->write_cache.iobuf = iobuf_get2 (
+                                          this->ctx->iobuf_pool, 1024*1024);
+                                if (priv->write_cache.iobuf == NULL) {
+                                        break;
+                                }
+
+                                priv->write_cache.handle = args->fi->fh;
+                                priv->write_cache.offset = args->offset;
+                                priv->write_cache.size = 0;
+                        }
+
+                        if (args->fi->fh == priv->write_cache.handle &&
+                            args->offset == priv->write_cache.offset + priv->write_cache.size &&
+                            priv->write_cache.size + args->size <= iobuf_size (priv->write_cache.iobuf)) {
+                                memcpy (iobuf_ptr(priv->write_cache.iobuf) + priv->write_cache.size,
+                                        args->buf, args->size);
+                                priv->write_cache.size += args->size;
+                                winfsp_send_result (this, msg, args->size);
+                        } else {
+                                fuse_flush_write_cache (this);
+
+                                priv->write_cache.iobuf = iobuf_get2 (
+                                          this->ctx->iobuf_pool, 1024*1024);
+                                if (priv->write_cache.iobuf == NULL) {
+                                        break;
+                                }
+
+                                priv->write_cache.handle = args->fi->fh;
+                                priv->write_cache.offset = args->offset;
+                                priv->write_cache.size = 0;
+
+                                memcpy (iobuf_ptr(priv->write_cache.iobuf) + priv->write_cache.size,
+                                        args->buf, args->size);
+                                priv->write_cache.size += args->size;
+                                winfsp_send_result (this, msg, args->size);
+                        }
+                } else {
+                        if (priv->write_cache.iobuf != NULL) {
+                                fuse_flush_write_cache (this);
+                        }
+
                         priv->fuse_ops[msg->type](this, msg);
                 }
         }
@@ -5335,7 +5455,7 @@ fuse_graph_setup (xlator_t* this, glusterfs_graph_t* graph)
 
         priv = this->private;
 
-        pthread_mutex_lock (&priv->sync_mutex);
+        uv_mutex_lock (&priv->sync_mutex);
         {
                 /* handle the case of more than one CHILD_UP on same graph */
                 if ((priv->active_subvol == graph->top) || graph->used) {
@@ -5369,7 +5489,7 @@ fuse_graph_setup (xlator_t* this, glusterfs_graph_t* graph)
                  * critical section update and bails on error */
                 graph->used = 1;
         }
-        pthread_mutex_unlock (&priv->sync_mutex);
+        uv_mutex_unlock (&priv->sync_mutex);
 
         if ((prev_graph != NULL) && (winds == 0)) {
                 xlator_notify (prev_graph->top, GF_EVENT_PARENT_DOWN,
@@ -5381,7 +5501,7 @@ fuse_graph_setup (xlator_t* this, glusterfs_graph_t* graph)
 
         return ret;
 unlock:
-        pthread_mutex_unlock (&priv->sync_mutex);
+        uv_mutex_unlock (&priv->sync_mutex);
 
         return ret;
 }
@@ -5418,17 +5538,17 @@ notify (xlator_t* this, int32_t event, void* data, ...)
 
                         if ((event == GF_EVENT_CHILD_UP) ||
                             (event == GF_EVENT_CHILD_DOWN)) {
-                                pthread_mutex_lock (&private->sync_mutex);
+                                uv_mutex_lock (&private->sync_mutex);
                                 {
                                       private
                                         ->event_recvd = 1;
-                                        pthread_cond_broadcast (
+                                        uv_cond_broadcast (
                                           &private->sync_cond);
                                 }
-                                pthread_mutex_unlock (&private->sync_mutex);
+                                uv_mutex_unlock (&private->sync_mutex);
                         }
 
-                        pthread_mutex_lock (&private->sync_mutex);
+                        uv_mutex_lock (&private->sync_mutex);
                         {
                                 if (!private->fuse_thread_started) {
                                       private
@@ -5436,7 +5556,7 @@ notify (xlator_t* this, int32_t event, void* data, ...)
                                         start_thread = _gf_true;
                                 }
                         }
-                        pthread_mutex_unlock (&private->sync_mutex);
+                        uv_mutex_unlock (&private->sync_mutex);
 
                         if (start_thread) {
                                 int policy;
@@ -5546,11 +5666,11 @@ fuse_dumper (xlator_t* this, winfsp_msg_t* msg)
                        msg, msg->type, msg->unique);
 
         if (ret != -1) {
-                pthread_mutex_lock (&priv->fuse_dump_mutex);
+                uv_mutex_lock (&priv->fuse_dump_mutex);
 
                 ret = write (priv->fuse_dump_fd, buf, ret);
 
-                pthread_mutex_unlock (&priv->fuse_dump_mutex);
+                uv_mutex_unlock (&priv->fuse_dump_mutex);
 
                 SH_FREE (buf);
         }
@@ -5628,8 +5748,8 @@ init (xlator_t* this_xl)
         priv->mount_point = NULL;
 
         INIT_LIST_HEAD (&priv->invalidate_list);
-        pthread_cond_init (&priv->invalidate_cond, NULL);
-        pthread_mutex_init (&priv->invalidate_mutex, NULL);
+        uv_cond_init (&priv->invalidate_cond);
+        uv_mutex_init (&priv->invalidate_mutex);
 
         /* get options from option dictionary */
         ret = dict_get_str (options, ZR_MOUNTPOINT_OPT, &value_string);
@@ -5694,6 +5814,8 @@ init (xlator_t* this_xl)
 
                 goto cleanup_exit;
         }
+
+        priv->write_cache.iobuf = NULL;
 
         GF_OPTION_INIT (ZR_ATTR_TIMEOUT_OPT, priv->attribute_timeout, double,
                         cleanup_exit);
@@ -5871,13 +5993,13 @@ init (xlator_t* this_xl)
 
         this_xl->history = event;
 
-        pthread_mutex_init (&priv->fuse_dump_mutex, NULL);
-        pthread_cond_init (&priv->sync_cond, NULL);
-        pthread_mutex_init (&priv->sync_mutex, NULL);
+        uv_mutex_init (&priv->fuse_dump_mutex);
+        uv_cond_init (&priv->sync_cond);
+        uv_mutex_init (&priv->sync_mutex);
         priv->event_recvd = 0;
 
-        pthread_mutex_init (&priv->msg_mutex, NULL);
-        pthread_cond_init (&priv->msg_cond, NULL);
+        uv_mutex_init (&priv->msg_mutex);
+        uv_cond_init (&priv->msg_cond);
         INIT_LIST_HEAD (&priv->msg_list);
         INIT_LIST_HEAD (&priv->wait_list);
 
@@ -5948,16 +6070,16 @@ fini (xlator_t* this_xl)
         if ((priv = this_xl->private) == NULL)
                 return;
 
-        pthread_mutex_lock (&priv->sync_mutex);
+        uv_mutex_lock (&priv->sync_mutex);
         {
                 if (!(priv->fini_invoked)) {
                         priv->fini_invoked = _gf_true;
                 } else {
-                        pthread_mutex_unlock (&priv->sync_mutex);
+                        uv_mutex_unlock (&priv->sync_mutex);
                         return;
                 }
         }
-        pthread_mutex_unlock (&priv->sync_mutex);
+        uv_mutex_unlock (&priv->sync_mutex);
 
         if (dict_get (this_xl->options, ZR_MOUNTPOINT_OPT))
                 mount_point =

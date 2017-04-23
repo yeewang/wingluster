@@ -71,12 +71,12 @@ free_fuse_state (fuse_state_t* state)
         fuse_resolve_wipe (&state->resolve);
         fuse_resolve_wipe (&state->resolve2);
 
-        pthread_mutex_lock (&priv->sync_mutex);
+        uv_mutex_lock (&priv->sync_mutex);
         {
                 winds = --state->active_subvol->winds;
                 switched = state->active_subvol->switched;
         }
-        pthread_mutex_unlock (&priv->sync_mutex);
+        uv_mutex_unlock (&priv->sync_mutex);
 
         if ((winds == 0) && (switched)) {
                 xlator_notify (state->active_subvol, GF_EVENT_PARENT_DOWN,
@@ -104,12 +104,12 @@ get_fuse_state (xlator_t* this, fuse_in_header_t* finh)
         state->this = get_fuse_xlator ();
         priv = this->private;
 
-        pthread_mutex_lock (&priv->sync_mutex);
+        uv_mutex_lock (&priv->sync_mutex);
         {
                 active_subvol = fuse_active_subvol (state->this);
                 active_subvol->winds++;
         }
-        pthread_mutex_unlock (&priv->sync_mutex);
+        uv_mutex_unlock (&priv->sync_mutex);
 
         state->active_subvol = active_subvol;
         state->itable = active_subvol->itable;
