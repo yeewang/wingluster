@@ -172,12 +172,16 @@ event_register_poll (struct event_pool* event_pool, void* trans,
         GF_VALIDATE_OR_GOTO ("event", event_pool, out);
         GF_VALIDATE_OR_GOTO ("event", trans, out);
 
-        gf_msg ("poll", GF_LOG_DEBUG, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-                "Registering a new trans (trans=%p) to the pool", trans);
-
         uv_mutex_lock (&event_pool->mutex);
         {
-                if (__event_get_loop_node (event_pool, trans)) {
+                new_loop = __event_get_loop_node (event_pool, trans);
+
+                if (new_loop != NULL) {
+                        gf_log ("poll", GF_LOG_TRACE,
+                                "Reuse trans (trans=%p, handler=%p) to the pool",
+                                trans, handler);
+
+                        new_loop->handler = handler;
                         ret = __event_invoke (event_pool, BT_INIT, trans);
 
                 } else {
@@ -195,6 +199,12 @@ event_register_poll (struct event_pool* event_pool, void* trans,
                         new_loop->handler = handler;
 			INIT_LIST_HEAD (&new_loop->event_list);
 
+                        list_add_tail (&new_loop->list, &event_pool->loop_list);
+
+                        gf_log ("poll", GF_LOG_TRACE,
+                                "Register a new trans (trans=%p, handler=%p, loop=%p) to the pool",
+                                trans, handler, new_loop);
+
                         ret = pthread_create (&new_loop->tid, NULL,
                                               event_dispatch_worker, new_loop);
                         if (ret) {
@@ -204,8 +214,6 @@ event_register_poll (struct event_pool* event_pool, void* trans,
                                         "Failed to start dispatch thread");
                                 goto unlock;
                         }
-
-                        list_add_tail (&new_loop->list, &event_pool->loop_list);
 
                         ret = __event_invoke (event_pool, BT_INIT, trans);
 
@@ -306,8 +314,8 @@ __event_handler (struct loop_node* loop_node, struct event_node* event_node)
                         else {
                                 gf_msg ("epoll", GF_LOG_DEBUG, 0,
                                         LG_MSG_START_EPOLL_THREAD_FAILED,
-                                        "The handler is NULL: %p",
-                                        event_node->trans);
+                                        "The handler is NULL: (loop_node=%p, trans=%p)",
+                                        loop_node, event_node->trans);
                         }
 
 			/* append a next notify to the loop */

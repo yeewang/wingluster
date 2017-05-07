@@ -4,7 +4,7 @@
 #include "fuse-bridge.h"
 #include <fuse.h>
 
-#define USE_IOBUF (1)
+//#define USE_IOBUF (1)
 
 #define INVALIDE_HANDLE (-1)
 
@@ -85,6 +85,15 @@ typedef struct
         off_t offset;
         struct fuse_file_info* fi;
 } winfsp_write_t;
+
+typedef struct
+{
+        const char* path;
+        struct iobuf* buf;
+        size_t size;
+        off_t offset;
+        uint64_t handle;
+} winfsp_write_ex_t;
 
 typedef struct
 {

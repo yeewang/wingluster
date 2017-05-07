@@ -2492,11 +2492,10 @@ fuse_write (xlator_t* this, winfsp_msg_t* msg)
         return;
 }
 
-
 static void
-fuse_write_ex (xlator_t* this, winfsp_msg_t* msg, struct iobuf* iobuf)
+fuse_write_ex (xlator_t* this, winfsp_msg_t* msg)
 {
-        winfsp_write_t* args = (winfsp_write_t*)msg->args;
+        winfsp_write_ex_t* args = (winfsp_write_ex_t*)msg->args;
         fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
         fd_t* fd = NULL;
@@ -2508,11 +2507,11 @@ fuse_write_ex (xlator_t* this, winfsp_msg_t* msg, struct iobuf* iobuf)
 
         state->stub = msg;
 
-        fd = FH_TO_FD (args->fi->fh);
+        fd = FH_TO_FD (args->handle);
         state->fd = fd;
         state->size = args->size;
         state->off = args->offset;
-        state->iobuf = iobuf;
+        state->iobuf = args->buf;
 
         /* convert FUSE_WRITE_LOCKOWNER, etc ? */
         state->io_flags = FUSE_WRITE_CACHE;
@@ -2528,7 +2527,7 @@ fuse_write_ex (xlator_t* this, winfsp_msg_t* msg, struct iobuf* iobuf)
                 state->lk_owner = args->fi->lock_owner;
         */
 
-        state->vector.iov_base = iobuf_ptr (iobuf);
+        state->vector.iov_base = iobuf_ptr (args->buf);
         state->vector.iov_len = args->size;
 
         fuse_resolve_and_resume (state, fuse_write_resume);
@@ -4242,34 +4241,24 @@ notify_kernel_loop (void* data)
         for (;;) {
                 uv_mutex_lock (&priv->invalidate_mutex);
                 {
-                        while (list_empty (&priv->invalidate_list))
-                                uv_cond_wait (&priv->invalidate_cond,
-                                                   &priv->invalidate_mutex);
+                        uv_cond_timedwait (&priv->invalidate_cond,
+                                           &priv->invalidate_mutex,
+                                           5 * 1e9);
 
-                        node = list_entry (priv->invalidate_list.next,
-                                           fuse_invalidate_node_t, next);
+                        list_for_each_entry_safe (node, tmp, &priv->invalidate_list,
+                                                  next)
+                        {
+                                list_del_init (&node->next);
+                                SH_FREE (node);
+                        }
 
-                        list_del_init (&node->next);
+                        uv_sem_post (&priv->msg_sem);
                 }
                 uv_mutex_unlock (&priv->invalidate_mutex);
-
-                SH_FREE (node);
         }
 
         gf_log ("glusterfs-fuse", GF_LOG_ERROR,
                 "kernel notifier loop terminated");
-
-        uv_mutex_lock (&priv->invalidate_mutex);
-        {
-                priv->reverse_fuse_thread_started = _gf_false;
-                list_for_each_entry_safe (node, tmp, &priv->invalidate_list,
-                                          next)
-                {
-                        list_del_init (&node->next);
-                        SH_FREE (node);
-                }
-        }
-        uv_mutex_unlock (&priv->invalidate_mutex);
 
         return NULL;
 }
@@ -4959,8 +4948,7 @@ fuse_graph_sync (xlator_t* this)
                 need_first_lookup = 1;
 
                 while (!priv->event_recvd) {
-                        uv_cond_wait (&priv->sync_cond,
-                                      &priv->sync_mutex);
+                        uv_cond_wait (&priv->sync_cond, &priv->sync_mutex);
                 }
         }
 unlock:
@@ -5072,7 +5060,7 @@ static struct fuse_work_tbl
         { FUSE_NOTIFY_REPLY, 1, 1 }, /* = 41 */
         { FUSE_BATCH_FORGET, 1, 1 }, /* = 42 */
         { FUSE_FALLOCATE, 1, 1 },    /* = 43 */
-        { FUSE_READDIRPLUS, 1, 4 }, /* = 44 */
+        { FUSE_READDIRPLUS, 1, 4 },  /* = 44 */
         { FUSE_AUTORELEASE, 0, 1000 },
         { FUSE_WAITMSG, 1, 1 },
 };
@@ -5139,32 +5127,140 @@ get_next_msg (fuse_private_t* priv)
         return entry;
 }
 
+static int
+get_timeout (fuse_private_t* priv)
+{
+        winfsp_msg_t* entry = NULL;
+        winfsp_waitmsg_t* waitmsg = NULL;
+        int timeout = 20 * 1e3;
+
+        list_for_each_entry (entry, &priv->wait_list, list)
+        {
+                waitmsg = (winfsp_waitmsg_t*)entry->args;
+                if (timeout > waitmsg->msg->timeout) {
+                        timeout = waitmsg->msg->timeout;
+                }
+        }
+        return timeout;
+}
+
+static void
+cleanup_timeout (xlator_t* this)
+{
+        fuse_private_t* priv = NULL;
+        winfsp_msg_t *entry = NULL, *n;
+        winfsp_waitmsg_t* waitmsg = NULL;
+        int end = uv_hrtime () / 1e6;
+
+        priv = this->private;
+
+        list_for_each_entry_safe (entry, n, &priv->wait_list, list)
+        {
+                waitmsg = (winfsp_waitmsg_t*)entry->args;
+                if (end > waitmsg->msg->start + waitmsg->msg->timeout) {
+                        list_del (&entry->list);
+
+                        list_add (&waitmsg->msg->list, &priv->msg_list);
+
+gf_msg(this->name, GF_LOG_INFO, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+               "fuse retry type:%d, unique:%d", waitmsg->msg->type, waitmsg->msg->unique);
+
+
+#ifdef NEVER
+                        if (waitmsg->msg->autorelease) {
+                                winfsp_cleanup_req (waitmsg->msg);
+                        } else {
+                                uv_mutex_lock (&waitmsg->msg->mutex);
+                                {
+                                        waitmsg->msg->fin = 1;
+                                }
+                                uv_mutex_unlock (&waitmsg->msg ->mutex);
+
+                                uv_sem_post (&waitmsg->msg->sem);
+                        }
+#endif /* NEVER */
+
+#ifndef USE_IOBUF
+                        SH_FREE (entry);
+#else
+                        iobuf_unref (entry->iobuf);
+#endif /* USE_IOBUF */
+                }
+        }
+}
+
+static int
+add_pending_req (xlator_t* this, winfsp_msg_t* msg)
+{
+        fuse_private_t* priv = NULL;
+        winfsp_msg_t* waitmsg = NULL;
+        winfsp_waitmsg_t* args = NULL;
+        struct iobuf* iobuf = NULL;
+        int ret = -1;
+
+        priv = this->private;
+
+#ifndef USE_IOBUF
+        waitmsg =
+          SH_CALLOC (1, sizeof (winfsp_msg_t) + sizeof (winfsp_waitmsg_t),
+                     gf_fuse_mt_winfsp_msg_t);
+        if (waitmsg == NULL) {
+                goto cleanup_exit;
+        }
+#else
+        iobuf = iobuf_get2 (this->ctx->iobuf_pool,
+                            sizeof (winfsp_msg_t) + sizeof (winfsp_waitmsg_t));
+        if (iobuf == NULL)
+                goto cleanup_exit;
+        waitmsg = iobuf_ptr (iobuf);
+        waitmsg->iobuf = iobuf;
+#endif /* USE_IOBUF */
+        INIT_LIST_HEAD (&waitmsg->list);
+        args = (winfsp_waitmsg_t*)waitmsg->args;
+        args->msg = msg;
+        waitmsg->unique = get_fuse_op_unique ();
+        waitmsg->autorelease = _gf_false;
+        waitmsg->fin = 0;
+        waitmsg->ret = -1;
+        waitmsg->type = FUSE_WAITMSG;
+
+        list_add_tail (&waitmsg->list, &priv->wait_list);
+
+        ret = 0;
+
+cleanup_exit:
+        return ret;
+}
+
 static void
 fuse_flush_write_cache (xlator_t* this)
 {
         fuse_private_t* priv = NULL;
         winfsp_msg_t* write_msg = NULL;
-        winfsp_write_t* params = NULL;
+        winfsp_write_ex_t* params = NULL;
         struct fuse_file_info fi;
 
         priv = this->private;
 
         write_msg =
-          winfsp_get_req (THIS, FUSE_WRITE, sizeof (winfsp_write_t));
+          winfsp_get_req (THIS, FUSE_WRITE_EX, sizeof (winfsp_write_ex_t));
         if (write_msg == NULL)
                 return;
 
         write_msg->autorelease = _gf_true;
-        params = (winfsp_write_t*)write_msg->args;
+        params = (winfsp_write_ex_t*)write_msg->args;
         params->path = NULL;
-        params->buf = NULL;
+        params->buf = priv->write_cache.iobuf;
         params->size = priv->write_cache.size;
         params->offset = priv->write_cache.offset;
-        params->fi = &fi;
-        params->fi->fh = priv->write_cache.handle;
+        params->handle = priv->write_cache.handle;
 
-        fuse_write_ex (this, write_msg, priv->write_cache.iobuf);
-        iobuf_unref (priv->write_cache.iobuf);
+        if (add_pending_req (this, write_msg) != 0) {
+                winfsp_cleanup_req (write_msg);
+                return;
+        }
+
+        fuse_write_ex (this, write_msg);
         priv->write_cache.iobuf = NULL;
 }
 
@@ -5178,6 +5274,7 @@ fuse_thread_proc (void* data)
         winfsp_msg_t* waitmsg = NULL;
         winfsp_waitmsg_t* args = NULL;
         int ret = -1;
+        int tmp = 0;
 
         this = data;
         priv = this->private;
@@ -5195,7 +5292,6 @@ fuse_thread_proc (void* data)
                 {
 
                         while ((msg = get_next_msg (priv)) == NULL) {
-
 #if 0
                                 winfsp_msg_t* tt;
                                 list_for_each_entry(tt, &priv->msg_list, list) {
@@ -5213,46 +5309,22 @@ fuse_thread_proc (void* data)
                                 }
 #endif /* DEBUG */
 
-                                uv_cond_timedwait (&priv->msg_cond,
-                                                   &priv->msg_mutex, 60000);
+                                uv_mutex_unlock (&priv->msg_mutex);
+                                uv_sem_wait (&priv->msg_sem);
+                                uv_mutex_lock (&priv->msg_mutex);
+
+                                gf_msg(this->name, GF_LOG_INFO, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+                                       "hhhh2%d", tmp++);
+
+                                // cleanup_timeout (this);
                         }
-
-
 
                         if (msg->type != FUSE_AUTORELEASE &&
                             msg->type != FUSE_FORGET &&
                             msg->type != FUSE_BATCH_FORGET) {
-#ifndef USE_IOBUF
-                                waitmsg =
-                                  SH_CALLOC (1, sizeof (winfsp_msg_t) +
-                                                  sizeof (winfsp_waitmsg_t),
-                                             gf_fuse_mt_winfsp_msg_t);
-#else
-                                iobuf =
-                                  iobuf_get2 (this->ctx->iobuf_pool,
-                                              sizeof (winfsp_msg_t) +
-                                                sizeof (winfsp_waitmsg_t));
-                                if (iobuf == NULL)
+                                ret = add_pending_req (this, msg);
+                                if (ret != 0)
                                         goto cleanup_exit;
-                                waitmsg = iobuf_ptr (iobuf);
-                                waitmsg->iobuf = iobuf;
-#endif /* USE_IOBUF */
-
-                                if (waitmsg == NULL) {
-                                        uv_mutex_unlock (&priv->msg_mutex);
-                                        goto cleanup_exit;
-                                }
-                                INIT_LIST_HEAD (&waitmsg->list);
-                                args = (winfsp_waitmsg_t*)waitmsg->args;
-                                args->msg = msg;
-                                waitmsg->unique = get_fuse_op_unique ();
-                                waitmsg->autorelease = _gf_false;
-                                waitmsg->fin = 0;
-                                waitmsg->ret = -1;
-                                waitmsg->type = FUSE_WAITMSG;
-
-                                list_add_tail (&waitmsg->list,
-                                               &priv->wait_list);
                         }
                 }
                 uv_mutex_unlock (&priv->msg_mutex);
@@ -5267,22 +5339,32 @@ fuse_thread_proc (void* data)
                                 "parent: %" PRIu64 ", path: %s",
                                 msg->type, msg->unique, args->parent,
                                 args->basename);
-                } if (msg->type == FUSE_READ) {
+                } else if (msg->type == FUSE_AUTORELEASE) {
+
+                } else if (msg->type == FUSE_READ) {
                         winfsp_read_t* args = (winfsp_read_t*)msg->args;
                         gf_msg (this->name, GF_LOG_INFO, 0,
                                 LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                                 "fuse recieved message type: %d, unique: %lu, "
                                 "path: %s, size: %lld. offset: %lld",
-                                msg->type, msg->unique, args->path,
-                                args->size, args->offset);
-                }  if (msg->type == FUSE_WRITE) {
+                                msg->type, msg->unique, args->path, args->size,
+                                args->offset);
+                } else if (msg->type == FUSE_WRITE) {
                         winfsp_write_t* args = (winfsp_write_t*)msg->args;
                         gf_msg (this->name, GF_LOG_INFO, 0,
                                 LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                                 "fuse recieved message type: %d, unique: %lu, "
                                 "path: %s, size: %lld. offset: %lld",
-                                msg->type, msg->unique, args->path,
-                                args->size, args->offset);
+                                msg->type, msg->unique, args->path, args->size,
+                                args->offset);
+                } else if (msg->type == FUSE_WRITE_EX) {
+                        winfsp_write_ex_t* args = (winfsp_write_ex_t*)msg->args;
+                        gf_msg (this->name, GF_LOG_INFO, 0,
+                                LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+                                "fuse recieved message type: %d, unique: %lu, "
+                                "handle=%lld, size: %lld, offset: %lld",
+                                msg->type, msg->unique, args->handle, args->size,
+                                args->offset);
                 } else {
                         winfsp_opendir_t* args = (winfsp_opendir_t*)msg->args;
                         gf_msg (this->name, GF_LOG_INFO, 0,
@@ -5293,51 +5375,19 @@ fuse_thread_proc (void* data)
                 }
 #endif /* DEBUG */
 
+                msg->start = uv_hrtime () / 1e6;
+
                 if (msg->type >= FUSE_OP_HIGH)
                         fuse_enosys (this, msg);
-                else if (msg->type == FUSE_WRITE) {
-                        winfsp_write_t* args = (winfsp_write_t*)msg->args;
+                else {
 
-                        if (priv->write_cache.iobuf == NULL) {
-                                priv->write_cache.iobuf = iobuf_get2 (
-                                          this->ctx->iobuf_pool, 1024*1024);
-                                if (priv->write_cache.iobuf == NULL) {
-                                        break;
+
+                        if (msg->type != FUSE_WRITE_EX) {
+                                uv_mutex_lock (&priv->write_cache.lock);
+                                if (priv->write_cache.iobuf != NULL) {
+                                        fuse_flush_write_cache (this);
                                 }
-
-                                priv->write_cache.handle = args->fi->fh;
-                                priv->write_cache.offset = args->offset;
-                                priv->write_cache.size = 0;
-                        }
-
-                        if (args->fi->fh == priv->write_cache.handle &&
-                            args->offset == priv->write_cache.offset + priv->write_cache.size &&
-                            priv->write_cache.size + args->size <= iobuf_size (priv->write_cache.iobuf)) {
-                                memcpy (iobuf_ptr(priv->write_cache.iobuf) + priv->write_cache.size,
-                                        args->buf, args->size);
-                                priv->write_cache.size += args->size;
-                                winfsp_send_result (this, msg, args->size);
-                        } else {
-                                fuse_flush_write_cache (this);
-
-                                priv->write_cache.iobuf = iobuf_get2 (
-                                          this->ctx->iobuf_pool, 1024*1024);
-                                if (priv->write_cache.iobuf == NULL) {
-                                        break;
-                                }
-
-                                priv->write_cache.handle = args->fi->fh;
-                                priv->write_cache.offset = args->offset;
-                                priv->write_cache.size = 0;
-
-                                memcpy (iobuf_ptr(priv->write_cache.iobuf) + priv->write_cache.size,
-                                        args->buf, args->size);
-                                priv->write_cache.size += args->size;
-                                winfsp_send_result (this, msg, args->size);
-                        }
-                } else {
-                        if (priv->write_cache.iobuf != NULL) {
-                                fuse_flush_write_cache (this);
+                                uv_mutex_unlock (&priv->write_cache.lock);
                         }
 
                         priv->fuse_ops[msg->type](this, msg);
@@ -5542,8 +5592,7 @@ notify (xlator_t* this, int32_t event, void* data, ...)
                                 {
                                       private
                                         ->event_recvd = 1;
-                                        uv_cond_broadcast (
-                                          &private->sync_cond);
+                                        uv_cond_broadcast (&private->sync_cond);
                                 }
                                 uv_mutex_unlock (&private->sync_mutex);
                         }
@@ -5648,6 +5697,7 @@ static fuse_handler_t* fuse_std_ops[FUSE_OP_HIGH] = {
 
           [FUSE_BATCH_FORGET] = fuse_batch_forget,
           [FUSE_FALLOCATE] = fuse_fallocate, [FUSE_READDIRPLUS] = fuse_readdirp,
+          [FUSE_WRITE_EX] = fuse_write_ex,
           [FUSE_AUTORELEASE] = fuse_autorelease, [FUSE_WAITMSG] = fuse_waitmsg,
 };
 
@@ -5815,7 +5865,10 @@ init (xlator_t* this_xl)
                 goto cleanup_exit;
         }
 
+        uv_mutex_init (&priv->write_cache.lock);
         priv->write_cache.iobuf = NULL;
+        uv_mutex_init (&priv->read_cache.lock);
+        priv->read_cache.iobuf = NULL;
 
         GF_OPTION_INIT (ZR_ATTR_TIMEOUT_OPT, priv->attribute_timeout, double,
                         cleanup_exit);
@@ -5999,7 +6052,7 @@ init (xlator_t* this_xl)
         priv->event_recvd = 0;
 
         uv_mutex_init (&priv->msg_mutex);
-        uv_cond_init (&priv->msg_cond);
+        uv_sem_init (&priv->msg_sem, 1);
         INIT_LIST_HEAD (&priv->msg_list);
         INIT_LIST_HEAD (&priv->wait_list);
 

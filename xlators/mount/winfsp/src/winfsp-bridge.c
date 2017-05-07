@@ -373,16 +373,96 @@ winfsp_read (const char* path, char* buf, size_t size, off_t offset,
 }
 
 static int
+winfsp_read_base (const char* path, char* buf, size_t size, off_t offset,
+                  struct fuse_file_info* fi)
+{
+        xlator_t* this = get_fuse_xlator ();
+        fuse_private_t* priv = NULL;
+        int ret = -1;
+
+        priv = this->private;
+
+        uv_mutex_lock (&priv->read_cache.lock);
+        {
+                if (priv->read_cache.iobuf == NULL) {
+                        priv->read_cache.iobuf =
+                          iobuf_get2 (this->ctx->iobuf_pool, MAX_READ_PAGE);
+                        if (priv->read_cache.iobuf == NULL) {
+                                goto unlock;
+                        }
+
+                        priv->read_cache.path = path;
+                        priv->read_cache.handle = fi->fh;
+                        priv->read_cache.offset = offset;
+                        priv->read_cache.size = winfsp_read_base (
+                          path, iobuf_ptr (priv->read_cache.iobuf),
+                          MAX_READ_PAGE, offset, fi);
+
+                        if (priv->read_cache.size < 0) {
+                                ret = priv->read_cache.size;
+                                iobuf_unref (priv->read_cache.iobuf);
+                                priv->read_cache.iobuf = NULL;
+                                priv->read_cache.handle = INVALIDE_HANDLE;
+                                priv->read_cache.offset = 0;
+                                priv->read_cache.size = 0;
+                                goto unlock;
+                        }
+                }
+
+                if (fi->fh == priv->read_cache.handle &&
+                    offset >= priv->read_cache.offset &&
+                    offset + size <=
+                      priv->read_cache.offset + priv->read_cache.size) {
+                        memcpy (buf, iobuf_ptr (priv->read_cache.iobuf) +
+                                       offset - priv->read_cache.offset,
+                                size);
+                        ret = size;
+                } else {
+                        priv->read_cache.iobuf =
+                          iobuf_get2 (this->ctx->iobuf_pool, MAX_READ_PAGE);
+                        if (priv->read_cache.iobuf == NULL) {
+                                goto unlock;
+                        }
+
+                        priv->read_cache.path = path;
+                        priv->read_cache.handle = fi->fh;
+                        priv->read_cache.offset = offset;
+                        priv->read_cache.size = winfsp_read_base (
+                          path, iobuf_ptr (priv->read_cache.iobuf),
+                          MAX_READ_PAGE, offset, fi);
+
+                        if (priv->read_cache.size < 0) {
+                                ret = priv->read_cache.size;
+                                iobuf_unref (priv->read_cache.iobuf);
+                                priv->read_cache.iobuf = NULL;
+                                priv->read_cache.handle = INVALIDE_HANDLE;
+                                priv->read_cache.offset = 0;
+                                priv->read_cache.size = 0;
+                                goto unlock;
+                        }
+
+                        memcpy (buf, iobuf_ptr (priv->read_cache.iobuf) +
+                                       offset - priv->read_cache.offset,
+                                size);
+                        ret = size;
+                }
+        }
+unlock:
+        uv_mutex_unlock (&priv->read_cache.lock);
+
+        return ret;
+}
+
+static int
 winfsp_write_001 (const char* path, const char* buf, size_t size, off_t offset,
-              struct fuse_file_info* fi)
+                  struct fuse_file_info* fi)
 {
         xlator_t* this = get_fuse_xlator ();
         winfsp_msg_t* msg = NULL;
         winfsp_write_t* params = NULL;
         int ret = -1;
 
-        msg =
-          winfsp_get_req (THIS, FUSE_WRITE, sizeof (winfsp_write_t));
+        msg = winfsp_get_req (THIS, FUSE_WRITE, sizeof (winfsp_write_t));
         if (msg == NULL)
                 return -1;
 
@@ -400,8 +480,177 @@ winfsp_write_001 (const char* path, const char* buf, size_t size, off_t offset,
 }
 
 static int
+winfsp_write_ex (xlator_t* this, const char* path, struct iobuf* buf,
+                 size_t size, off_t offset, uint64_t handle, int sync)
+{
+        fuse_private_t* priv = NULL;
+        winfsp_msg_t* msg = NULL;
+        winfsp_write_ex_t* params = NULL;
+        int ret = -1;
+
+        priv = this->private;
+
+        msg = winfsp_get_req (THIS, FUSE_WRITE_EX, sizeof (winfsp_write_ex_t));
+        if (msg == NULL)
+                return -1;
+
+        params = (winfsp_write_t*)msg->args;
+        params->path = path;
+        params->buf = buf;
+        params->size = size;
+        params->offset = offset;
+        params->handle = handle;
+
+        gf_msg(this->name, GF_LOG_INFO, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+               "wwwwww:message type: %d, unique: %lu, "
+                                "size: %lld. offset: %lld",
+                                msg->type, msg->unique, params->size,
+                                params->offset);
+
+        winfsp_send_req (msg);
+
+        gf_msg(this->name, GF_LOG_INFO, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+               "ppppp2:message type: %d, unique: %lu, "
+                                "size: %lld. offset: %lld",
+                                msg->type, msg->unique, params->size,
+                                params->offset);
+
+        if (sync)
+                ret = winfsp_get_result_and_cleanup (msg);
+        else
+                ret = 0;
+
+        gf_msg(this->name, GF_LOG_INFO, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+               "eeeeeee:message "
+                                "size: %lld. offset: %lld",
+                                size,
+                                offset);
+
+        return ret;
+}
+
+static int
 winfsp_write (const char* path, const char* buf, size_t size, off_t offset,
               struct fuse_file_info* fi)
+{
+        xlator_t* this = get_fuse_xlator ();
+        fuse_private_t* priv = NULL;
+        struct iobuf* t_iobuf;
+        const char* t_path;
+        uint64_t t_handle;
+        size_t t_offset;
+        size_t t_size;
+        int flush = 0, append = 0;
+        int ret = -1;
+
+        priv = this->private;
+
+        uv_mutex_lock (&priv->write_cache.lock);
+        {
+                if (priv->write_cache.iobuf == NULL) {
+                        priv->write_cache.iobuf =
+                          iobuf_get2 (this->ctx->iobuf_pool, MAX_WRITE_PAGE);
+                        if (priv->write_cache.iobuf == NULL) {
+                                goto unlock;
+                        }
+
+                        priv->write_cache.path = NULL;
+                        priv->write_cache.handle = fi->fh;
+                        priv->write_cache.offset = offset;
+                        priv->write_cache.size = 0;
+                }
+
+                if (fi->fh == priv->write_cache.handle &&
+                    offset ==
+                      priv->write_cache.offset + priv->write_cache.size &&
+                    priv->write_cache.size + size <=
+                      iobuf_size (priv->write_cache.iobuf)) {
+                        memcpy (iobuf_ptr (priv->write_cache.iobuf) +
+                                  priv->write_cache.size,
+                                buf, size);
+                        priv->write_cache.size += size;
+                        ret = size;
+
+                        if (priv->write_cache.size ==
+                            iobuf_size (priv->write_cache.iobuf)) {
+                                flush = 1;
+                        }
+                } else {
+                        flush = 1;
+                        append = 1;
+                }
+
+                if (flush) {
+                        t_iobuf = priv->write_cache.iobuf;
+                        t_path = priv->write_cache.path;
+                        t_handle = priv->write_cache.handle;
+                        t_offset = priv->write_cache.offset;
+                        t_size = priv->write_cache.size;
+
+                        priv->write_cache.iobuf = NULL;
+                        priv->write_cache.path = NULL;
+                        priv->write_cache.handle = fi->fh;
+                        priv->write_cache.offset = offset;
+                        priv->write_cache.size = 0;
+                        uv_mutex_unlock (&priv->write_cache.lock);
+
+                        winfsp_write_ex (this, t_path, t_iobuf, t_size,
+                                         t_offset, t_handle, 1);
+
+                        uv_mutex_lock (&priv->write_cache.lock);
+                }
+
+                if (append) {
+                        priv->write_cache.iobuf =
+                          iobuf_get2 (this->ctx->iobuf_pool, MAX_WRITE_PAGE);
+                        if (priv->write_cache.iobuf == NULL) {
+                                goto unlock;
+                        }
+
+                        priv->write_cache.path = NULL;
+                        priv->write_cache.handle = fi->fh;
+                        priv->write_cache.offset = offset;
+                        priv->write_cache.size = 0;
+
+                        memcpy (iobuf_ptr (priv->write_cache.iobuf) +
+                                  priv->write_cache.size,
+                                buf, size);
+                        priv->write_cache.size += size;
+                        ret = size;
+
+                        if (priv->write_cache.size ==
+                            iobuf_size (priv->write_cache.iobuf)) {
+                                flush = 1;
+
+                                t_iobuf = priv->write_cache.iobuf;
+                                t_path = priv->write_cache.path;
+                                t_handle = priv->write_cache.handle;
+                                t_offset = priv->write_cache.offset;
+                                t_size = priv->write_cache.size;
+
+                                priv->write_cache.iobuf = NULL;
+                                priv->write_cache.path = NULL;
+                                priv->write_cache.handle = fi->fh;
+                                priv->write_cache.offset = offset;
+                                priv->write_cache.size = 0;
+                                uv_mutex_unlock (&priv->write_cache.lock);
+
+                                winfsp_write_ex (this, t_path, t_iobuf, t_size,
+                                                 t_offset, t_handle, 1);
+
+                                uv_mutex_lock (&priv->write_cache.lock);
+                        }
+                }
+        }
+unlock:
+        uv_mutex_unlock (&priv->write_cache.lock);
+
+        return ret;
+}
+
+static int
+winfsp_write_003 (const char* path, const char* buf, size_t size, off_t offset,
+                  struct fuse_file_info* fi)
 {
         xlator_t* this = get_fuse_xlator ();
         winfsp_msg_t* msg = NULL;
@@ -410,27 +659,13 @@ winfsp_write (const char* path, const char* buf, size_t size, off_t offset,
         size_t part = 0;
         int ret = -1;
 
-        while (noff < size)  {
-                if ((size - noff) > 1024*1024)
-                        part = 1024*1024;
+        while (noff < size) {
+                if ((size - noff) > MAX_WRITE_PAGE)
+                        part = MAX_WRITE_PAGE;
                 else
                         part = size - noff;
 
-                msg =
-                  winfsp_get_req (THIS, FUSE_WRITE, sizeof (winfsp_write_t));
-                if (msg == NULL)
-                        return -1;
-
-                params = (winfsp_write_t*)msg->args;
-                params->path = path;
-                params->buf = buf + noff;
-                params->size = part;
-                params->offset = offset + noff;
-                params->fi = fi;
-
-                winfsp_send_req (msg);
-                ret = winfsp_get_result_and_cleanup (msg);
-
+                ret = winfsp_write (path, buf + noff, part, offset + noff, fi);
                 if (ret > 0)
                         noff += ret;
                 else
@@ -613,8 +848,7 @@ winfsp_readdirp_ex (const char* path, void* buf, fuse_fill_dir_t filler,
                 uv_mutex_lock (&params->mutex);
                 {
                         while (!end && list_empty (&params->list)) {
-                                uv_cond_wait (&params->cond,
-                                              &params->mutex);
+                                uv_cond_wait (&params->cond, &params->mutex);
                         }
 
                         if (!end) {
@@ -1184,26 +1418,6 @@ winfsp_destroy (void* data)
                 data);
 }
 
-#ifdef _WIN32
-
-static uint32_t
-win_get_attributes (const char* fn)
-{
-}
-
-static int
-win_set_attributes (const char* fn, uint32_t attr)
-{
-}
-
-static int
-win_set_times (const char* fn, struct fuse_file_info*, const FILETIME* create,
-               const FILETIME* access, const FILETIME* modified)
-{
-}
-
-#endif
-
 static int
 list_count (struct list_head* head)
 {
@@ -1304,7 +1518,7 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
                         }
 
                         if (notify)
-                                uv_cond_broadcast (&priv->msg_cond);
+                                uv_sem_post (&priv->msg_sem);
                 }
                 uv_mutex_unlock (&priv->msg_mutex);
 
@@ -1365,11 +1579,12 @@ winfsp_get_req (xlator_t* this, int type, size_t size)
         iobuf =
           iobuf_get2 (this->ctx->iobuf_pool, sizeof (winfsp_msg_t) + size);
         if (iobuf == NULL)
-                return -1;
+                return NULL;
         msg = iobuf_ptr (iobuf);
         msg->iobuf = iobuf;
 #endif /* USE_IOBUF */
         INIT_LIST_HEAD (&msg->list);
+        msg->timeout = 20 * 1000;
         msg->error_count = 0;
         msg->unique = get_fuse_op_unique ();
         msg->autorelease = _gf_false;
@@ -1403,26 +1618,15 @@ winfsp_send_req (winfsp_msg_t* msg)
 
         uv_mutex_lock (&priv->msg_mutex);
         {
-#ifdef NEVER
-                while (list_count (&priv->msg_list) > 20) {
-                        winfsp_msg_t* tt;
-                        list_for_each_entry (tt, &priv->msg_list, list)
-                        {
-                                gf_msg (this->name, GF_LOG_INFO, 0,
-                                        LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-                                        "the requesting message %p type: %d, "
-                                        "unique: %lu",
-                                        tt, tt->type, tt->unique);
-                        }
-
-                        // sleep (1);
-                        break;
+                while (list_count (&priv->msg_list) > 100) {
+                        uv_mutex_unlock (&priv->msg_mutex);
+                        sleep (1);
+                        uv_mutex_lock (&priv->msg_mutex);
                 }
-#endif /* NEVER */
 
                 list_add_tail (&msg->list, &priv->msg_list);
 
-                uv_cond_broadcast (&priv->msg_cond);
+                uv_sem_post (&priv->msg_sem);
         }
         uv_mutex_unlock (&priv->msg_mutex);
 }
@@ -1474,8 +1678,9 @@ winfsp_get_result (winfsp_msg_t* msg)
         uv_mutex_lock (&msg->mutex);
         {
                 while (!msg->fin) {
-                        ret = uv_cond_timedwait (&msg->cond, &msg->mutex, 5000);
-                        if (ret != 0 && msg->error_count > 5) {
+                        uv_cond_wait (&msg->cond, &msg->mutex);
+                        ret = 0;
+                        if (ret != 0) {
                                 msg->error_count++;
                                 gf_log ("fuse-bridage", GF_LOG_WARNING,
                                         "timedwait returned non zero value "
@@ -1501,8 +1706,9 @@ winfsp_get_result_and_cleanup (winfsp_msg_t* msg)
         uv_mutex_lock (&msg->mutex);
         {
                 while (!msg->fin) {
-                        ret = uv_cond_timedwait (&msg->cond, &msg->mutex, 5000);
-                        if (ret != 0 && msg->error_count > 5) {
+                        uv_cond_wait (&msg->cond, &msg->mutex);
+                        ret = 0;
+                        if (ret != 0) {
                                 msg->error_count++;
                                 gf_log ("fuse-bridage", GF_LOG_WARNING,
                                         "timedwait returned non zero value "
@@ -1532,8 +1738,6 @@ winfsp_get_result_and_cleanup (winfsp_msg_t* msg)
 void
 winfsp_cleanup_req (winfsp_msg_t* msg)
 {
-        uv_mutex_unlock (&msg->mutex);
-
         uv_mutex_destroy (&msg->mutex);
         uv_cond_destroy (&msg->cond);
 

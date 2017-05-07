@@ -38,9 +38,16 @@
 
 #include "winfsp-info.h"
 
-#define FUSE_AUTORELEASE (FUSE_READDIRPLUS + 1)
-#define FUSE_WAITMSG (FUSE_READDIRPLUS + 2)
-#define FUSE_OP_HIGH (FUSE_READDIRPLUS + 3)
+enum
+{
+        FUSE_WRITE_EX = (FUSE_READDIRPLUS + 1),
+        FUSE_AUTORELEASE,
+        FUSE_WAITMSG,
+        FUSE_OP_HIGH
+};
+
+#define MAX_WRITE_PAGE (1 * 1024 * 1024)
+#define MAX_READ_PAGE  (1 * 1024 * 1024)
 
 #define GLUSTERFS_XATTR_LEN_MAX 65536
 
@@ -56,12 +63,25 @@ struct fuse_private
         size_t volfile_size;
         char* mount_point;
 
-        struct {
+        struct
+        {
+                uv_mutex_t lock;
+                const char* path;
                 struct iobuf* iobuf;
                 uint64_t handle;
                 size_t offset;
                 size_t size;
         } write_cache;
+
+        struct
+        {
+                uv_mutex_t lock;
+                const char* path;
+                struct iobuf* iobuf;
+                uint64_t handle;
+                size_t offset;
+                size_t size;
+        } read_cache;
 
         pthread_t fuse_thread;
         pthread_t mount_thread;
@@ -81,7 +101,7 @@ struct fuse_private
 
         char init_recvd;
 
-        uv_cond_t msg_cond;
+        uv_cond_t msg_sem;
         uv_mutex_t msg_mutex;
         struct list_head msg_list;
         struct list_head wait_list;
@@ -391,6 +411,8 @@ typedef struct winfsp_msg
         struct list_head list;
         uv_cond_t cond;
         uv_mutex_t mutex;
+        int timeout; /* milisecond */
+        int start; /* milisecond */
         struct iobuf* iobuf;
         int error_count;
         int type;
