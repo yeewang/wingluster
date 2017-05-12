@@ -432,7 +432,7 @@ fuse_entry_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                                   calc_timeout_nsec (priv->negative_timeout);
                         }
 
-                        winfsp_send_result (this, stub, 0);
+                        winfsp_send_result (this, stub, op_errno);
                 } else {
                         winfsp_send_err (this, stub, op_errno);
                 }
@@ -3038,38 +3038,6 @@ fuse_readdirp_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
 
         next_entry:
 
-                /* Make a callback to filter */
-                uv_mutex_lock (&rd_stub->mutex);
-                {
-                        winfsp_readdirp_item_t* msg =
-                          (winfsp_readdirp_item_t*)SH_CALLOC (
-                            1, sizeof (winfsp_readdirp_item_t),
-                            gf_fuse_mt_char);
-                        if (msg == NULL) {
-                                gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
-                                        "%" PRIu64 ": READDIRP => -1 (%s)",
-                                        frame->root->unique, strerror (ENOMEM));
-
-                                uv_cond_broadcast (&rd_stub->cond);
-
-                                uv_mutex_unlock (&rd_stub->mutex);
-
-                                winfsp_send_err (this, stub, ENOMEM);
-                                goto out;
-                        }
-
-                        INIT_LIST_HEAD (&msg->list);
-                        msg->off = size;
-                        msg->size = max_size;
-
-                        list_add_tail (&msg->list, &rd_stub->list);
-
-                        if (count % 10 == 0) {
-                                uv_cond_broadcast (&rd_stub->cond);
-                        }
-                }
-                uv_mutex_unlock (&rd_stub->mutex);
-
                 count++;
 
                 if (size == max_size)
@@ -3077,14 +3045,6 @@ fuse_readdirp_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
         }
 
         rd_stub->out_size = max_size;
-
-        if (count % 10) {
-                uv_mutex_lock (&rd_stub->mutex);
-                {
-                        uv_cond_broadcast (&rd_stub->cond);
-                }
-                uv_mutex_unlock (&rd_stub->mutex);
-        }
 
         winfsp_send_result (this, stub, 0);
 out:
@@ -5017,7 +4977,7 @@ static struct fuse_work_tbl
         int num_of_works; /* how many works can be executed. */
 } fuse_work_tbl[] = {
         { 0, 0, 0 },
-        { FUSE_LOOKUP, 50, 1 },   /* = 1 */
+        { FUSE_LOOKUP, 40, 1 },   /* = 1 */
         { FUSE_FORGET, 1, 1 },    /* = 2, no reply */
         { FUSE_GETATTR, 40, 4 },  /* = 3 */
         { FUSE_SETATTR, 40, 4 },  /* = 4 */
@@ -5043,7 +5003,7 @@ static struct fuse_work_tbl
         { FUSE_REMOVEXATTR, 1, 4 },  /* = 24 */
         { FUSE_FLUSH, 20, 1 },       /* = 25 */
         { FUSE_INIT, 99, 1 },        /* = 26 */
-        { FUSE_OPENDIR, 10, 1 },     /* = 27 */
+        { FUSE_OPENDIR, 40, 1 },     /* = 27 */
         { FUSE_READDIR, 10, 1 },     /* = 28 */
         { FUSE_RELEASEDIR, 1, 1 },   /* = 29 */
         { FUSE_FSYNCDIR, 20, 1 },    /* = 30 */
@@ -5060,7 +5020,8 @@ static struct fuse_work_tbl
         { FUSE_NOTIFY_REPLY, 1, 1 }, /* = 41 */
         { FUSE_BATCH_FORGET, 1, 1 }, /* = 42 */
         { FUSE_FALLOCATE, 1, 1 },    /* = 43 */
-        { FUSE_READDIRPLUS, 1, 4 },  /* = 44 */
+        { FUSE_READDIRPLUS, 40, 1 },  /* = 44 */
+        { FUSE_WRITE_EX, 1, 2 },
         { FUSE_AUTORELEASE, 0, 1000 },
         { FUSE_WAITMSG, 1, 1 },
 };
@@ -5082,7 +5043,7 @@ msg_can_work (fuse_private_t* priv, int type)
         winfsp_waitmsg_t* waitmsg = NULL;
         int order = 0;
         int count = 0;
-        int ret = 0;
+        int ret = 1;
 
         list_for_each_entry (entry, &priv->wait_list, list)
         {
@@ -5096,9 +5057,9 @@ msg_can_work (fuse_private_t* priv, int type)
                 }
         }
 
-        if (count < fuse_work_tbl[type].num_of_works &&
-            order <= fuse_work_tbl[type].order) {
-                ret = 1;
+        if (count > fuse_work_tbl[type].num_of_works ||
+            order > fuse_work_tbl[type].order) {
+                ret = 0;
         }
 
         return ret;
@@ -5313,8 +5274,8 @@ fuse_thread_proc (void* data)
                                 uv_sem_wait (&priv->msg_sem);
                                 uv_mutex_lock (&priv->msg_mutex);
 
-                                gf_msg(this->name, GF_LOG_INFO, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-                                       "hhhh2%d", tmp++);
+                                //gf_msg(this->name, GF_LOG_INFO, 0, LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+                                //       "hhhh2%d", tmp++);
 
                                 // cleanup_timeout (this);
                         }
@@ -5375,14 +5336,13 @@ fuse_thread_proc (void* data)
                 }
 #endif /* DEBUG */
 
-                msg->start = uv_hrtime () / 1e6;
+                //msg->start = uv_hrtime () / 1e6;
 
                 if (msg->type >= FUSE_OP_HIGH)
                         fuse_enosys (this, msg);
                 else {
-
-
-                        if (msg->type != FUSE_WRITE_EX) {
+                        if (msg->type != FUSE_AUTORELEASE &&
+                            msg->type != FUSE_WRITE_EX) {
                                 uv_mutex_lock (&priv->write_cache.lock);
                                 if (priv->write_cache.iobuf != NULL) {
                                         fuse_flush_write_cache (this);
@@ -5674,7 +5634,8 @@ static fuse_handler_t* fuse_std_ops[FUSE_OP_HIGH] = {
           [FUSE_LOOKUP] = fuse_lookup, [FUSE_FORGET] = fuse_forget,
           [FUSE_GETATTR] = fuse_getattr, [FUSE_SETATTR] = fuse_setattr,
           [FUSE_READLINK] = fuse_readlink, [FUSE_SYMLINK] = fuse_symlink,
-          [FUSE_MKNOD] = fuse_mknod, [FUSE_MKDIR] = fuse_mkdir,
+          [FUSE_MKNOD] = fuse_mknod,
+          [FUSE_MKDIR] = fuse_mkdir,
           [FUSE_UNLINK] = fuse_unlink, [FUSE_RMDIR] = fuse_rmdir,
           [FUSE_RENAME] = fuse_rename, [FUSE_LINK] = fuse_link,
           [FUSE_OPEN] = fuse_open, [FUSE_READ] = fuse_read,
@@ -5684,7 +5645,8 @@ static fuse_handler_t* fuse_std_ops[FUSE_OP_HIGH] = {
           [FUSE_LISTXATTR] = fuse_listxattr,
           [FUSE_REMOVEXATTR] = fuse_removexattr, [FUSE_FLUSH] = fuse_flush,
           [FUSE_INIT] = fuse_init, [FUSE_OPENDIR] = fuse_opendir,
-          [FUSE_READDIR] = fuse_lookup_dir, [FUSE_RELEASEDIR] = fuse_releasedir,
+          [FUSE_READDIR] = fuse_lookup_dir,
+          [FUSE_RELEASEDIR] = fuse_releasedir,
           [FUSE_FSYNCDIR] = fuse_fsyncdir, [FUSE_GETLK] = fuse_getlk,
           [FUSE_SETLK] = fuse_setlk, [FUSE_SETLKW] = fuse_setlk,
           [FUSE_ACCESS] = fuse_access, [FUSE_CREATE] = fuse_create,
@@ -5696,7 +5658,8 @@ static fuse_handler_t* fuse_std_ops[FUSE_OP_HIGH] = {
           /* [FUSE_NOTIFY_REPLY] */
 
           [FUSE_BATCH_FORGET] = fuse_batch_forget,
-          [FUSE_FALLOCATE] = fuse_fallocate, [FUSE_READDIRPLUS] = fuse_readdirp,
+          [FUSE_FALLOCATE] = fuse_fallocate,
+          [FUSE_READDIRPLUS] = fuse_readdirp,
           [FUSE_WRITE_EX] = fuse_write_ex,
           [FUSE_AUTORELEASE] = fuse_autorelease, [FUSE_WAITMSG] = fuse_waitmsg,
 };

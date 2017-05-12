@@ -24,9 +24,13 @@ struct fuse_cache_operations
                              fuse_cache_dirfil_t);
 };
 
+typedef enum {
+        IP_NODO, IP_TOUCH, IP_RELOAD, IP_ADD, IP_DELETE
+} invalidate_parent_t;
+
 struct fuse_operations* cache_init (struct fuse_cache_operations* oper);
 int cache_parse_options (struct fuse_args* args);
 void cache_add_attr (const char* path, const struct stat* stbuf,
                      uint64_t wrctr);
-void cache_invalidate (const char* path, int dirty_parent);
+void cache_invalidate (const char* path, invalidate_parent_t touch_parent);
 uint64_t cache_get_write_ctr (void);

@@ -111,22 +111,11 @@ typedef struct
 
 typedef struct
 {
-        struct list_head list;
-        size_t off;
-        size_t size;
-} winfsp_readdirp_item_t;
-
-typedef struct
-{
         const char* path;
         void* buf;
         fuse_fill_dir_t filler;
         off_t offset;
         struct fuse_file_info* fi;
-
-        uv_cond_t cond;
-        uv_mutex_t mutex;
-        struct list_head list;
 
         char* out_buf;
         size_t out_size;

@@ -16,6 +16,9 @@
 #include <string.h>
 #include <uv.h>
 #include "list.h"
+#include "mem-pool.h"
+#include "common-utils.h"
+
 
 #define DEFAULT_CACHE_TIMEOUT_SECS 20
 #define DEFAULT_CACHE_EMPTY_TIMEOUT_SECS 5
@@ -67,7 +70,6 @@ struct fuse_cache_dirhandle
 
 /* refresh list */
 
-#ifdef NEVER
 #ifndef CONTAINER_OF
 #define CONTAINER_OF(ptr, type, field)                                         \
         ((type*)((char*)(ptr) - ((char*)&((type*)0)->field)))
@@ -79,7 +81,7 @@ typedef enum refresh_type {
 } refresh_type_t;
 
 struct cache_refresh_node {
-        list_head list;
+        struct list_head list;
         char* path;
         refresh_type_t type;
 };
@@ -87,9 +89,17 @@ struct cache_refresh_node {
 static struct list_head cache_refresh_list;
 uv_cond_t cache_refresh_cond;
 uv_mutex_t cache_refresh_lock;
-#endif /* NEVER */
 
 /* end of refresh list */
+
+static void
+cache_add_nullpath (const char* path);
+
+static void
+cache_node_changed (const char* path);
+
+static void
+cache_add_dir (const char* path, char** dir);
 
 static void
 free_node (gpointer node_)
@@ -155,16 +165,17 @@ cache_dirty_parent (const char* path)
         struct node* node = NULL;
         const char* s = strrchr (path, '/');
         if (s) {
-                if (s == path)
+                if (s == path) {
                         node = cache_lookup ("/");
+                        node->dir_valid  = 0;
+                        //cache_node_changed (path);
+                }
                 else {
                         char* parent = g_strndup (path, s - path);
                         node = cache_lookup (parent);
-                        g_free (parent);
-                }
-
-                if (node) {
                         node->dir_valid  = 0;
+                        //cache_node_changed (parent);
+                        g_free (parent);
                 }
         }
 }
@@ -192,16 +203,64 @@ cache_touch_parent (const char* path)
         }
 }
 
+static void
+cache_add_parent (const char* path)
+{
+        char* parent = NULL;
+        struct node* pnode = NULL;
+        char** dir;
+        const char* name;
+        GPtrArray* newdir;
+        const char* s = strrchr (path, '/');
+        if (s) {
+                if (s == path) {
+                        parent = g_strdup ("/");
+                        pnode = cache_lookup (parent);
+                } else {
+                        parent = g_strndup (path, s - path);
+                        pnode = cache_lookup (parent);
+                }
+        }
+        name = s + 1;
+
+        if (pnode == NULL) {
+                cache_node_changed (path);
+                if (parent)
+                        g_free (parent);
+                return;
+        }
+
+        newdir = g_ptr_array_new ();
+        for (dir = pnode->dir; *dir != NULL; dir++) {
+                g_ptr_array_add (newdir, *dir);
+        }
+        g_ptr_array_add (newdir, name);
+        g_ptr_array_add (newdir, NULL);
+        cache_add_dir (parent, (char**)newdir->pdata);
+        g_ptr_array_free (newdir, FALSE);
+
+        /* does not insert self node! */
+
+        if (parent)
+                g_free (parent);
+}
+
 void
-cache_invalidate (const char* path, int dirty_parent)
+cache_invalidate (const char* path, invalidate_parent_t touch_parent)
 {
         if (!cache.on)
                 return;
 
         uv_mutex_lock (&cache.lock);
         cache_purge (path);
-        if (dirty_parent)
+        if (touch_parent == IP_TOUCH)
                 cache_touch_parent (path);
+        else if (touch_parent == IP_RELOAD)
+                cache_dirty_parent (path);
+        else if (touch_parent == IP_ADD)
+                cache_dirty_parent (path);
+        else if (touch_parent == IP_DELETE)
+                cache_add_nullpath (path);
         uv_mutex_unlock (&cache.lock);
 }
 
@@ -243,8 +302,8 @@ cache_do_rename (const char* from, const char* to)
         uv_mutex_lock (&cache.lock);
         g_hash_table_foreach_remove (cache.table, (GHRFunc)cache_del_children,
                                      (char*)from);
-        cache_invalidate (from, 1);
-        cache_invalidate (to, 1);
+        cache_invalidate (from, IP_RELOAD);
+        cache_invalidate (to, IP_RELOAD);
         uv_mutex_unlock (&cache.lock);
 }
 
@@ -433,11 +492,13 @@ cache_dirfill (fuse_cache_dirh_t ch, const char* name, const struct stat* stbuf)
         return err;
 }
 
+#define DELAY_RELOAD 1
+
 int
 cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
 {
         struct fuse_cache_dirhandle ch;
-        int err;
+        int err = 0;
         char** dir;
         struct node* node;
 
@@ -445,22 +506,29 @@ cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
         node = cache_lookup (path);
         if (node != NULL && node->dir != NULL) {
                 time_t now = time (NULL);
-                if (node->dir_valid - now >= 0) {
-                        const char* basepath = !path[1] ? "" : path;
-                        for (dir = node->dir; *dir != NULL; dir++) {
-                                struct node* subnode;
-                                char* fullpath;
-                                fullpath = g_strdup_printf ("%s/%s", basepath, *dir);
-                                subnode = cache_lookup (fullpath);
-                                if (subnode && !subnode->nullpath) {
-                                        filler (h, *dir, 0, 0);
-                                }
-                                g_free (fullpath);
-                        }
-                        uv_mutex_unlock (&cache.lock);
-                        return 0;
+                if (node->dir_valid - now < 0) {
+#if DELAY_RELOAD
+                        cache_node_changed (path);
+#else
+                        goto unlock;
+#endif
                 }
+
+                const char* basepath = !path[1] ? "" : path;
+                for (dir = node->dir; *dir != NULL; dir++) {
+                        struct node* subnode;
+                        char* fullpath;
+                        fullpath = g_strdup_printf ("%s/%s", basepath, *dir);
+                        subnode = cache_lookup (fullpath);
+                        if (subnode && !subnode->nullpath) {
+                                filler (h, *dir, 0, 0);
+                        }
+                        g_free (fullpath);
+                }
+                uv_mutex_unlock (&cache.lock);
+                return 0;
         }
+unlock:
         uv_mutex_unlock (&cache.lock);
 
         ch.path = path;
@@ -501,7 +569,7 @@ cache_mknod (const char* path, mode_t mode, dev_t rdev)
 {
         int err = cache.next_oper->oper.mknod (path, mode, rdev);
         if (!err)
-                cache_invalidate (path, 1);
+                cache_invalidate (path, IP_RELOAD);
         return err;
 }
 
@@ -509,8 +577,9 @@ static int
 cache_mkdir (const char* path, mode_t mode)
 {
         int err = cache.next_oper->oper.mkdir (path, mode);
-        if (!err || err == EEXIST)
-                cache_invalidate (path, 1);
+        if (!err) {
+                cache_invalidate (path, IP_ADD);
+        }
         return err;
 }
 
@@ -519,7 +588,7 @@ cache_unlink (const char* path)
 {
         int err = cache.next_oper->oper.unlink (path);
         if (!err)
-                cache_invalidate (path, 1);
+                cache_invalidate (path, IP_RELOAD);
         return err;
 }
 
@@ -528,7 +597,7 @@ cache_rmdir (const char* path)
 {
         int err = cache.next_oper->oper.rmdir (path);
         if (!err)
-                cache_invalidate (path, 1);
+                cache_invalidate (path, IP_RELOAD);
         return err;
 }
 
@@ -537,7 +606,7 @@ cache_symlink (const char* from, const char* to)
 {
         int err = cache.next_oper->oper.symlink (from, to);
         if (!err)
-                cache_invalidate (to, 1);
+                cache_invalidate (to, IP_RELOAD);
         return err;
 }
 
@@ -555,8 +624,8 @@ cache_link (const char* from, const char* to)
 {
         int err = cache.next_oper->oper.link (from, to);
         if (!err) {
-                cache_invalidate (from, 1);
-                cache_invalidate (to, 1);
+                cache_invalidate (from, IP_RELOAD);
+                cache_invalidate (to, IP_RELOAD);
         }
         return err;
 }
@@ -566,7 +635,7 @@ cache_chmod (const char* path, mode_t mode)
 {
         int err = cache.next_oper->oper.chmod (path, mode);
         if (!err)
-                cache_invalidate (path, 0);
+                cache_invalidate (path, IP_TOUCH);
         return err;
 }
 
@@ -575,7 +644,7 @@ cache_chown (const char* path, uid_t uid, gid_t gid)
 {
         int err = cache.next_oper->oper.chown (path, uid, gid);
         if (!err)
-                cache_invalidate (path, 0);
+                cache_invalidate (path, IP_TOUCH);
         return err;
 }
 
@@ -584,7 +653,7 @@ cache_truncate (const char* path, off_t size)
 {
         int err = cache.next_oper->oper.truncate (path, size);
         if (!err)
-                cache_invalidate (path, 0);
+                cache_invalidate (path, IP_TOUCH);
         return err;
 }
 
@@ -633,7 +702,7 @@ cache_create (const char* path, mode_t mode, struct fuse_file_info* fi)
 {
         int err = cache.next_oper->oper.create (path, mode, fi);
         if (!err)
-                cache_invalidate (path, 1);
+                cache_invalidate (path, IP_ADD);
         return err;
 }
 
@@ -642,7 +711,7 @@ cache_ftruncate (const char* path, off_t size, struct fuse_file_info* fi)
 {
         int err = cache.next_oper->oper.ftruncate (path, size, fi);
         if (!err)
-                cache_invalidate (path, 0);
+                cache_invalidate (path, IP_TOUCH);
         return err;
 }
 
@@ -660,7 +729,6 @@ cache_fgetattr (const char* path, struct stat* stbuf, struct fuse_file_info* fi)
 }
 #endif
 
-#ifdef NEVER
 static int
 fill_cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
 {
@@ -684,56 +752,83 @@ fill_cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
         return err;
 }
 
-static int
-cache_node_compare (struct list_head *a, struct list_head *b)
+static void
+cache_node_changed (const char* path)
 {
-        struct cache_refresh_node* ra =
-                CONTAINER_OF (a, struct cache_refresh_node, list);
-        struct cache_refresh_node* rb =
-                CONTAINER_OF (b, struct cache_refresh_node, list);
+        struct cache_refresh_node *entry;
+        int append = 1;
 
+        uv_mutex_lock (&cache_refresh_lock);
+        list_for_each_entry (entry, &cache_refresh_list, list) {
+                if (strcmp (entry->path, path) == 0) {
+                        append = 0;
+                        break;
+                }
+        }
+        uv_mutex_unlock (&cache_refresh_lock);
+
+        if (append) {
+                struct cache_refresh_node* r =
+                        SH_CALLOC (1, sizeof (struct cache_refresh_node), 0);
+                if (r == NULL)
+                        return;
+
+                r->path = g_strdup(path);
+                r->type = RT_dir;
+
+                uv_mutex_lock (&cache_refresh_lock);
+                list_add (&r->list, &cache_refresh_list);
+                uv_cond_signal (&cache_refresh_cond);
+                uv_mutex_unlock (&cache_refresh_lock);
+        }
+}
+
+static int
+dummy_fuse_dirfil (fuse_dirh_t h, const char *name,
+                   int type, fuse_ino_t ino)
+{
         return 0;
 }
 
-static void
-cache_node_changed (struct node* node)
-{
-        struct cache_refresh_node* r =
-                SH_CALLOC (1, sizeof (struct cache_refresh_node), 0);
-        if (r == NULL)
-                return;
-
-        list_order (&r->list, cache_refresh_list);
-
-        uv_cond_signal ();
-}
-
 static void *
-cache_update_proc ()
+cache_update_proc (void *data)
 {
         struct cache_refresh_node* r = NULL;
 
         for (;;) {
-                while (list_empty (cache_refresh_list)) {
-                        uv_cond_wait ();
+                uv_mutex_lock (&cache_refresh_lock);
+
+                while (list_empty (&cache_refresh_list)) {
+                        uv_cond_timedwait (&cache_refresh_cond,
+                                           &cache_refresh_lock,
+                                           cache.dir_timeout_secs * 1e9);
                 }
 
-                list_for_each_entry (r, cache_refresh_list, list) {
+                list_for_each_entry (r, &cache_refresh_list, list) {
                         break;
                 }
+
+                uv_mutex_unlock (&cache_refresh_lock);
 
                 switch (r->type) {
                 case RT_attr:
-
                         break;
 
                 case RT_dir:
-                        fill_cache_getdir (r->path);
+                        fill_cache_getdir (r->path, NULL, dummy_fuse_dirfil);
                         break;
                 }
+
+                uv_mutex_lock (&cache_refresh_lock);
+                list_del (&r->list);
+                uv_mutex_unlock (&cache_refresh_lock);
+
+                g_free (r->path);
+                SH_FREE (r);
         }
+
+        return NULL;
 }
-#endif /* NEVER */
 
 static void
 cache_unity_fill (struct fuse_cache_operations* oper,
@@ -776,7 +871,7 @@ cache_unity_fill (struct fuse_cache_operations* oper,
 #endif
 #if FUSE_VERSION >= 29
         cache_oper->flag_nullpath_ok = oper->oper.flag_nullpath_ok;
-        cache_oper->flag_nopath = oper->oper.flag_nopath;ddde
+        cache_oper->flag_nopath = oper->oper.flag_nopath;
 #endif
 }
 
@@ -817,6 +912,9 @@ struct fuse_operations*
 cache_init (struct fuse_cache_operations* oper)
 {
         static struct fuse_operations cache_oper;
+        pthread_t thread;
+        int ret = -1;
+
         cache.next_oper = oper;
 
         cache_unity_fill (oper, &cache_oper);
@@ -828,6 +926,19 @@ cache_init (struct fuse_cache_operations* oper)
                 if (cache.table == NULL) {
                         fprintf (stderr, "failed to create cache\n");
                         return NULL;
+                }
+
+
+                INIT_LIST_HEAD (&cache_refresh_list);
+                uv_mutex_init (&cache_refresh_lock);
+                uv_cond_init (&cache_refresh_cond);
+
+                ret = gf_thread_create (&thread, NULL,
+                                        cache_update_proc, NULL);
+                if (ret != 0) {
+                        gf_log ("fuse-cache", GF_LOG_DEBUG,
+                                "pthread_create() failed (%s)",
+                                strerror (errno));
                 }
         }
         return &cache_oper;
