@@ -18,7 +18,38 @@
 
 #include <pthread.h>
 
-#if HAVE_SPINLOCK
+#if defined(GF_CYGWIN_HOST_OS)
+#include <uv.h>
+
+static inline int
+__uv_mutex_lock (uv_mutex_t *x)
+{
+        uv_mutex_lock (x);
+        return 0;
+}
+
+static inline int
+__uv_mutex_unlock (uv_mutex_t *x)
+{
+        uv_mutex_unlock (x);
+        return 0;
+}
+
+static inline int
+__uv_mutex_destroy (uv_mutex_t *x)
+{
+        uv_mutex_destroy (x);
+        return 0;
+}
+
+#define LOCK_INIT(x)    uv_mutex_init (x)
+#define LOCK(x)         __uv_mutex_lock (x)
+#define TRY_LOCK(x)     uv_mutex_trylock (x)
+#define UNLOCK(x)       __uv_mutex_unlock (x)
+#define LOCK_DESTROY(x) __uv_mutex_destroy (x)
+
+typedef uv_mutex_t gf_lock_t;
+#elif defined(HAVE_SPINLOCK)
 #define LOCK_INIT(x)    pthread_spin_init (x, 0)
 #define LOCK(x)         pthread_spin_lock (x)
 #define TRY_LOCK(x)     pthread_spin_trylock (x)

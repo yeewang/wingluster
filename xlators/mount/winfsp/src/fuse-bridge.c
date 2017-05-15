@@ -5211,7 +5211,7 @@ fuse_flush_write_cache (xlator_t* this)
         write_msg->autorelease = _gf_true;
         params = (winfsp_write_ex_t*)write_msg->args;
         params->path = NULL;
-        params->buf = priv->write_cache.iobuf;
+        params->buf = iobuf_ref (priv->write_cache.iobuf);
         params->size = priv->write_cache.size;
         params->offset = priv->write_cache.offset;
         params->handle = priv->write_cache.handle;

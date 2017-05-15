@@ -101,7 +101,7 @@ struct fuse_private
 
         char init_recvd;
 
-        uv_cond_t msg_sem;
+        uv_sem_t msg_sem;
         uv_mutex_t msg_mutex;
         struct list_head msg_list;
         struct list_head wait_list;

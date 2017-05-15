@@ -33,7 +33,7 @@ libglusterfs_la_SOURCES = dict.c xlator.c logging.c \
 	compat.c fd.c compat-errno.c mem-pool.c gf-dirent.c syscall.c \
 	iobuf.c globals.c statedump.c stack.c checksum.c daemon.c timespec.c \
 	$(CONTRIBDIR)/rbtree/rb.c rbthash.c store.c latency.c \
-	graph.c syncop.c graph-print.c trie.c run.c options.c fd-lk.c \
+	graph.c graph-print.c trie.c run.c options.c fd-lk.c \
 	circ-buff.c event-history.c gidcache.c ctx.c client_t.c \
 	event-epoll.c syncop-utils.c cluster-syncop.c refcount.c \
 	$(CONTRIBDIR)/libgen/basename_r.c \
@@ -45,9 +45,9 @@ libglusterfs_la_SOURCES = dict.c xlator.c logging.c \
 	$(CONTRIBDIR)/timer-wheel/find_last_bit.c tw.c throttle-tbf.c
 
 if GF_CYGWIN_HOST_OS
-libglusterfs_la_SOURCES += event-win32.c event-poll-win32.c
+libglusterfs_la_SOURCES += syncop-win32.c event-win32.c event-poll-win32.c
 else 
-libglusterfs_la_SOURCES += event.c event-poll.c
+libglusterfs_la_SOURCES += syncop.c event.c event-poll.c
 endif
 
 nodist_libglusterfs_la_SOURCES = y.tab.c graph.lex.c

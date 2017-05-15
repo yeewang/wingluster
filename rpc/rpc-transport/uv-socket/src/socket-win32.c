@@ -2251,7 +2251,7 @@ socket_proto_state_machine (rpc_transport_t* this,
         {
                 ret = __socket_proto_state_machine (this, pollin);
         }
-//-- pthread_mutex_unlock (&priv->lock);
+        //-- pthread_mutex_unlock (&priv->lock);
 
 out:
         return ret;
@@ -2973,6 +2973,7 @@ socket_do_next (rpc_transport_t* this)
         switch (priv->state) {
                 case S_REQ_CONNECT:
                         new_state = socket_do_connect (this);
+                        break;
                 case S_HANDSHAKE:
                         new_state = socket_do_handshake (this);
                         break;
@@ -3053,8 +3054,7 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
                 if (buf->base != NULL)
                         iobuf_unref (bufq->iobuf);
 
-                if (nread == 0 || nread == UV_EOF || nread == UV_EAGAIN ||
-                        nread == UV_ECONNRESET) {
+                if (nread == 0 || nread == UV_EOF || nread == UV_EAGAIN) {
                         handle_incoming = 1;
                 } else {
                         gf_log (this->name, GF_LOG_DEBUG,
@@ -3065,8 +3065,9 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 
                         if (nread == UV_ECONNRESET) {
                                 priv->handle.data = priv;
-                                uv_close (&priv->handle, socket_close_cb);
-                                uv_timer_again (&priv->timer);
+                                rpc_transport_notify (this, RPC_TRANSPORT_DISCONNECT, this);
+                                //uv_close (&priv->handle, socket_close_cb);
+                                //uv_timer_again (&priv->timer);
                         }
                 }
         } else if (nread <= buf->len) {
