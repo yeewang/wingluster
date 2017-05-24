@@ -1064,6 +1064,9 @@ fuse_setattr (xlator_t* this, winfsp_msg_t* msg)
         state->valid = args->valid;
 
         if (args->valid & (FATTR_ATIME | FATTR_MTIME)) {
+                gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
+                        "%" PRIu64 ": fuse_setattr time => %s",
+                        state->finh->unique, args->path);
                 state->attr.ia_atime = args->ts[0].tv_sec;
                 state->attr.ia_mtime = args->ts[1].tv_sec;
                 state->attr.ia_atime_nsec = args->ts[0].tv_nsec;
@@ -1087,13 +1090,21 @@ fuse_setattr (xlator_t* this, winfsp_msg_t* msg)
         }
 
         if (args->valid & (FATTR_SIZE)) {
+                gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
+                        "%" PRIu64 ": fuse_setattr off => %s, off=%d",
+                        state->finh->unique, args->path, args->off);
                 state->off = args->off;
+                state->truncate_needed = _gf_true;
         }
 
         /* Is the lockowner useful on Windows? */
         if (args->valid & FATTR_LOCKOWNER) {
                 if (args->fi != NULL)
                         state->lk_owner = args->fi->lock_owner;
+
+                gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
+                        "%" PRIu64 ": fuse_setattr off => %s, lockowner=%08x",
+                        state->finh->unique, args->path, state->lk_owner);
         }
 
         fuse_resolve_and_resume (state, fuse_setattr_resume);
@@ -4992,8 +5003,8 @@ static struct fuse_work_tbl
         { FUSE_LINK, 30, 1 },   /* = 13 */
         { FUSE_OPEN, 40, 8 },   /* = 14 */
         { FUSE_READ, 1, 8 },    /* = 15 */
-        { FUSE_WRITE, 1, 8 },   /* = 16 */
-        { FUSE_STATFS, 98, 1 }, /* = 17 */
+        { FUSE_WRITE, 40, 8 },   /* = 16 */
+        { FUSE_STATFS, 1, 1 }, /* = 17 */
         { FUSE_RELEASE, 1, 8 }, /* = 18 */
         { 19, 0, 0 },
         { FUSE_FSYNC, 10, 4 },       /* = 20 */
@@ -5021,7 +5032,7 @@ static struct fuse_work_tbl
         { FUSE_BATCH_FORGET, 1, 1 }, /* = 42 */
         { FUSE_FALLOCATE, 1, 1 },    /* = 43 */
         { FUSE_READDIRPLUS, 40, 1 },  /* = 44 */
-        { FUSE_WRITE_EX, 1, 2 },
+        { FUSE_WRITE_EX, 40, 2 },
         { FUSE_AUTORELEASE, 0, 1000 },
         { FUSE_WAITMSG, 1, 1 },
 };
@@ -5034,6 +5045,30 @@ list_count (struct list_head* head)
 
         list_for_each (node, head) { count++; }
         return count;
+}
+
+static winfsp_msg_t*
+fuse_flush_write_cache (fuse_private_t* priv)
+{
+        winfsp_msg_t* write_msg = NULL;
+        winfsp_write_ex_t* params = NULL;
+        struct fuse_file_info fi;
+
+        write_msg =
+          winfsp_get_req (THIS, FUSE_WRITE_EX, sizeof (winfsp_write_ex_t));
+        if (write_msg == NULL)
+                return NULL;
+
+        write_msg->autorelease = _gf_true;
+        params = (winfsp_write_ex_t*)write_msg->args;
+        params->path = NULL;
+        params->buf = iobuf_ref (priv->write_cache.iobuf);
+        params->size = priv->write_cache.size;
+        params->offset = priv->write_cache.offset;
+        params->handle = priv->write_cache.handle;
+        priv->write_cache.iobuf = NULL;
+
+        return write_msg;
 }
 
 static int
@@ -5076,7 +5111,15 @@ get_next_msg (fuse_private_t* priv)
         list_for_each_entry (n, &priv->msg_list, list)
         {
                 if (n->type < FUSE_OP_HIGH) {
-                        if (msg_can_work (priv, n->type)) {
+                        if (n->type != FUSE_WRITE_EX) {
+                                uv_mutex_lock (&priv->write_cache.lock);
+                                if (priv->write_cache.iobuf != NULL) {
+                                        entry = fuse_flush_write_cache (priv);
+                                }
+                                uv_mutex_unlock (&priv->write_cache.lock);
+                        }
+
+                        if (entry == NULL && msg_can_work (priv, n->type)) {
                                 list_del_init (n);
 
                                 entry = n;
@@ -5191,38 +5234,6 @@ add_pending_req (xlator_t* this, winfsp_msg_t* msg)
 
 cleanup_exit:
         return ret;
-}
-
-static void
-fuse_flush_write_cache (xlator_t* this)
-{
-        fuse_private_t* priv = NULL;
-        winfsp_msg_t* write_msg = NULL;
-        winfsp_write_ex_t* params = NULL;
-        struct fuse_file_info fi;
-
-        priv = this->private;
-
-        write_msg =
-          winfsp_get_req (THIS, FUSE_WRITE_EX, sizeof (winfsp_write_ex_t));
-        if (write_msg == NULL)
-                return;
-
-        write_msg->autorelease = _gf_true;
-        params = (winfsp_write_ex_t*)write_msg->args;
-        params->path = NULL;
-        params->buf = iobuf_ref (priv->write_cache.iobuf);
-        params->size = priv->write_cache.size;
-        params->offset = priv->write_cache.offset;
-        params->handle = priv->write_cache.handle;
-
-        if (add_pending_req (this, write_msg) != 0) {
-                winfsp_cleanup_req (write_msg);
-                return;
-        }
-
-        fuse_write_ex (this, write_msg);
-        priv->write_cache.iobuf = NULL;
 }
 
 static void*
@@ -5341,15 +5352,6 @@ fuse_thread_proc (void* data)
                 if (msg->type >= FUSE_OP_HIGH)
                         fuse_enosys (this, msg);
                 else {
-                        if (msg->type != FUSE_AUTORELEASE &&
-                            msg->type != FUSE_WRITE_EX) {
-                                uv_mutex_lock (&priv->write_cache.lock);
-                                if (priv->write_cache.iobuf != NULL) {
-                                        fuse_flush_write_cache (this);
-                                }
-                                uv_mutex_unlock (&priv->write_cache.lock);
-                        }
-
                         priv->fuse_ops[msg->type](this, msg);
                 }
         }

@@ -105,6 +105,7 @@ winfsp_getattr (const char* path, struct fuse_stat* stbuf)
 {
         winfsp_msg_t* msg = NULL;
         winfsp_getattr_t* params = NULL;
+        int ret = -1;
 
         msg = winfsp_get_req (THIS, FUSE_GETATTR, sizeof (winfsp_getattr_t));
         if (msg == NULL)
@@ -357,6 +358,7 @@ winfsp_read (const char* path, char* buf, size_t size, off_t offset,
 {
         winfsp_msg_t* msg = NULL;
         winfsp_read_t* params = NULL;
+        int ret = -1;
 
         msg = winfsp_get_req (THIS, FUSE_READ, sizeof (winfsp_read_t));
         if (msg == NULL)
@@ -371,7 +373,13 @@ winfsp_read (const char* path, char* buf, size_t size, off_t offset,
 
         winfsp_send_req (msg);
 
-        return winfsp_get_result_and_cleanup (msg);
+        ret = winfsp_get_result (msg);
+
+        winfsp_cleanup_req (msg);
+
+        return ret;
+
+        //return winfsp_get_result_and_cleanup (msg);
 }
 
 static int
@@ -822,7 +830,9 @@ winfsp_readdirp_cache (const char* path, fuse_cache_dirh_t* buf,
         params = (winfsp_readdirp_t*)msg->args;
         params->path = path;
         params->buf = buf;
-        params->filler = filler;
+        /* Did not use this paramenter.
+         * params->filler = filler; */
+        params->filler = NULL;
         params->offset = offset;
         params->fi = fi;
         params->out_buf = NULL;
@@ -926,7 +936,7 @@ winfsp_truncate (const char* path, off_t size)
         winfsp_setattr_t* params = NULL;
 
         this = THIS;
-        msg = winfsp_get_req (THIS, FUSE_SETATTR, sizeof (winfsp_setattr_t));
+        msg = winfsp_get_req (this, FUSE_SETATTR, sizeof (winfsp_setattr_t));
         if (msg == NULL)
                 return -1;
 
@@ -1172,7 +1182,10 @@ winfsp_chown (const char* path, uid_t uid, gid_t gid)
 
         winfsp_send_req (msg);
 
-        return winfsp_get_result_and_cleanup (msg);
+        winfsp_get_result_and_cleanup (msg);
+
+        /* disable error return. */
+        return 0;
 }
 
 static int
@@ -1259,9 +1272,11 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
         winfsp_autorelease_t* args = NULL;
         int notify = 0;
 
-        gf_log (this->name, GF_LOG_DEBUG,
-                "fuse return message %p type: %d, unique: %lu, ret: %d", msg,
-                msg->type, msg->unique, ret);
+#ifdef DEBUG
+        gf_log (this->name, GF_LOG_INFO,
+                "fuse return message %p type: %d, unique: %lu, ret: %d %s", msg,
+                msg->type, msg->unique, ret, ret != 0 ? strerror(-ret) : "");
+#endif /* DEBUG */
 
         uv_mutex_lock (&msg->mutex);
         {
@@ -1342,7 +1357,7 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
                 uv_mutex_unlock (&priv->msg_mutex);
 
                 if (!msg->autorelease) {
-                        uv_cond_broadcast (&msg->cond);
+                        uv_cond_signal (&msg->cond);
                 }
         }
         uv_mutex_unlock (&msg->mutex);
@@ -1387,7 +1402,9 @@ winfsp_msg_t*
 winfsp_get_req (xlator_t* this, int type, size_t size)
 {
         winfsp_msg_t* msg = NULL;
+#ifdef USE_IOBUF
         struct iobuf* iobuf = NULL;
+#endif
         struct fuse_context* ctx = get_fuse_header_in ();
 
 #ifndef USE_IOBUF
@@ -1447,6 +1464,23 @@ winfsp_send_req (winfsp_msg_t* msg)
 }
 
 void
+winfsp_inseart_req (winfsp_msg_t* msg)
+{
+        xlator_t* this = get_fuse_xlator ();
+        fuse_private_t* priv = NULL;
+
+        priv = this->private;
+
+        uv_mutex_lock (&priv->msg_mutex);
+        {
+                list_add (&msg->list, &priv->msg_list);
+
+                uv_sem_post (&priv->msg_sem);
+        }
+        uv_mutex_unlock (&priv->msg_mutex);
+}
+
+void
 winfsp_abort_req (winfsp_msg_t* msg)
 {
         xlator_t* this = get_fuse_xlator ();
@@ -1494,20 +1528,8 @@ winfsp_get_result (winfsp_msg_t* msg)
         {
                 while (!msg->fin) {
                         uv_cond_wait (&msg->cond, &msg->mutex);
-                        ret = 0;
-                        if (ret != 0) {
-                                msg->error_count++;
-                                gf_log ("fuse-bridage", GF_LOG_WARNING,
-                                        "timedwait returned non zero value "
-                                        "ret: %d errno: %d",
-                                        ret, errno);
-
-                                ret = -1;
-                                break;
-                        }
-
-                        ret = msg->ret;
                 }
+                ret = msg->ret;
         }
         uv_mutex_unlock (&msg->mutex);
 
@@ -1522,19 +1544,8 @@ winfsp_get_result_and_cleanup (winfsp_msg_t* msg)
         {
                 while (!msg->fin) {
                         uv_cond_wait (&msg->cond, &msg->mutex);
-                        ret = 0;
-                        if (ret != 0) {
-                                msg->error_count++;
-                                gf_log ("fuse-bridage", GF_LOG_WARNING,
-                                        "timedwait returned non zero value "
-                                        "ret: %d errno: %d",
-                                        ret, errno);
-                                ret = -1;
-                                break;
-                        }
-
-                        ret = msg->ret;
                 }
+                ret = msg->ret;
         }
         uv_mutex_unlock (&msg->mutex);
 

@@ -168,13 +168,11 @@ cache_dirty_parent (const char* path)
                 if (s == path) {
                         node = cache_lookup ("/");
                         node->dir_valid  = 0;
-                        //cache_node_changed (path);
                 }
                 else {
                         char* parent = g_strndup (path, s - path);
                         node = cache_lookup (parent);
                         node->dir_valid  = 0;
-                        //cache_node_changed (parent);
                         g_free (parent);
                 }
         }
@@ -231,9 +229,10 @@ cache_add_parent (const char* path)
         }
 
         newdir = g_ptr_array_new ();
-        for (dir = pnode->dir; *dir != NULL; dir++) {
-                g_ptr_array_add (newdir, *dir);
-        }
+        if (pnode->dir != NULL)
+                for (dir = pnode->dir; *dir != NULL; dir++) {
+                        g_ptr_array_add (newdir, *dir);
+                }
         g_ptr_array_add (newdir, name);
         g_ptr_array_add (newdir, NULL);
         cache_add_dir (parent, (char**)newdir->pdata);
@@ -252,13 +251,16 @@ cache_invalidate (const char* path, invalidate_parent_t touch_parent)
                 return;
 
         uv_mutex_lock (&cache.lock);
-        cache_purge (path);
         if (touch_parent == IP_TOUCH)
                 cache_touch_parent (path);
-        else if (touch_parent == IP_RELOAD)
+        else if (touch_parent == IP_RELOAD) {
+                cache_purge (path);
                 cache_dirty_parent (path);
-        else if (touch_parent == IP_ADD)
+        }
+        else if (touch_parent == IP_ADD) {
+                cache_purge (path);
                 cache_dirty_parent (path);
+        }
         else if (touch_parent == IP_DELETE)
                 cache_add_nullpath (path);
         uv_mutex_unlock (&cache.lock);
@@ -330,6 +332,7 @@ cache_add_attr (const char* path, const struct stat* stbuf, uint64_t wrctr)
         uv_mutex_lock (&cache.lock);
         if (wrctr == cache.write_ctr) {
                 node = cache_get (path);
+                node->nullpath = 0;
                 node->stat = *stbuf;
                 time_t stat_valid = time (NULL) + cache.stat_timeout_secs;
                 if (stat_valid > node->valid)
@@ -387,6 +390,9 @@ cache_add_nullpath (const char* path)
 
         uv_mutex_lock (&cache.lock);
         node = cache_get (path);
+        if (node->dir)
+                g_strfreev (node->dir);
+        node->dir = NULL;
         node->nullpath = 1;
         time_t stat_valid = time (NULL) + cache.empty_timeout_secs;
         if (stat_valid > node->valid)
@@ -433,10 +439,10 @@ cache_getattr (const char* path, struct stat* stbuf)
 {
         int err = cache_get_attr (path, stbuf);
         if (err == -ENOENT)
-                return err;
+                goto end;
 
         if (!err && stbuf->st_size != 0) // BUGBUG: gluster bug
-                return err;
+                goto end;
 
         uint64_t wrctr = cache_get_write_ctr ();
         err = cache.next_oper->oper.getattr (path, stbuf);
@@ -446,6 +452,7 @@ cache_getattr (const char* path, struct stat* stbuf)
         else if (!err)
                 cache_add_attr (path, stbuf, wrctr);
 
+end:
         return err;
 }
 
@@ -492,8 +499,6 @@ cache_dirfill (fuse_cache_dirh_t ch, const char* name, const struct stat* stbuf)
         return err;
 }
 
-#define DELAY_RELOAD 1
-
 int
 cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
 {
@@ -506,13 +511,10 @@ cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
         node = cache_lookup (path);
         if (node != NULL && node->dir != NULL) {
                 time_t now = time (NULL);
-                if (node->dir_valid - now < 0) {
-#if DELAY_RELOAD
-                        cache_node_changed (path);
-#else
+                if (node->dir_valid == 0)
                         goto unlock;
-#endif
-                }
+                else if (node->dir_valid - now < 0)
+                        cache_node_changed (path);
 
                 const char* basepath = !path[1] ? "" : path;
                 for (dir = node->dir; *dir != NULL; dir++) {
@@ -577,7 +579,7 @@ static int
 cache_mkdir (const char* path, mode_t mode)
 {
         int err = cache.next_oper->oper.mkdir (path, mode);
-        if (!err) {
+        if (err == 0 || err == -EEXIST) {
                 cache_invalidate (path, IP_ADD);
         }
         return err;
@@ -587,6 +589,9 @@ static int
 cache_unlink (const char* path)
 {
         int err = cache.next_oper->oper.unlink (path);
+        if (err == 0 || err == -ENOENT) {
+                cache_add_nullpath (path);
+        }
         if (!err)
                 cache_invalidate (path, IP_RELOAD);
         return err;
@@ -596,6 +601,9 @@ static int
 cache_rmdir (const char* path)
 {
         int err = cache.next_oper->oper.rmdir (path);
+        if (err == 0 || err == -ENOENT) {
+                cache_add_nullpath (path);
+        }
         if (!err)
                 cache_invalidate (path, IP_RELOAD);
         return err;
@@ -793,15 +801,15 @@ dummy_fuse_dirfil (fuse_dirh_t h, const char *name,
 static void *
 cache_update_proc (void *data)
 {
+
         struct cache_refresh_node* r = NULL;
 
         for (;;) {
                 uv_mutex_lock (&cache_refresh_lock);
 
                 while (list_empty (&cache_refresh_list)) {
-                        uv_cond_timedwait (&cache_refresh_cond,
-                                           &cache_refresh_lock,
-                                           cache.dir_timeout_secs * 1e9);
+                        uv_cond_wait (&cache_refresh_cond,
+                                      &cache_refresh_lock);
                 }
 
                 list_for_each_entry (r, &cache_refresh_list, list) {

@@ -257,6 +257,7 @@ int winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret);
 int winfsp_send_err (xlator_t* this, winfsp_msg_t* msg, int error);
 winfsp_msg_t* winfsp_get_req (xlator_t* this, int type, size_t size);
 void winfsp_send_req (winfsp_msg_t* msg);
+void winfsp_inseart_req (winfsp_msg_t* msg);
 void winfsp_abort_req (winfsp_msg_t* msg);
 int winfsp_get_result (winfsp_msg_t* msg);
 int winfsp_get_result_and_cleanup (winfsp_msg_t* msg);
