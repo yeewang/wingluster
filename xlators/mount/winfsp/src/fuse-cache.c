@@ -175,6 +175,10 @@ cache_dirty_parent (const char* path)
                         node->dir_valid  = 0;
                         g_free (parent);
                 }
+
+                        gf_log ("fuse-cache", GF_LOG_INFO,
+                "cccccccccccccc dirty_parent() (%s)",
+                path);
         }
 }
 
@@ -231,9 +235,9 @@ cache_add_parent (const char* path)
         newdir = g_ptr_array_new ();
         if (pnode->dir != NULL)
                 for (dir = pnode->dir; *dir != NULL; dir++) {
-                        g_ptr_array_add (newdir, *dir);
+                        g_ptr_array_add (newdir, g_strdup (*dir));
                 }
-        g_ptr_array_add (newdir, name);
+        g_ptr_array_add (newdir, g_strdup (name));
         g_ptr_array_add (newdir, NULL);
         cache_add_dir (parent, (char**)newdir->pdata);
         g_ptr_array_free (newdir, FALSE);
@@ -251,7 +255,9 @@ cache_invalidate (const char* path, invalidate_parent_t touch_parent)
                 return;
 
         uv_mutex_lock (&cache.lock);
-        if (touch_parent == IP_TOUCH)
+        if (touch_parent == IP_NODO)
+                cache_purge (path);
+        else if (touch_parent == IP_TOUCH)
                 cache_touch_parent (path);
         else if (touch_parent == IP_RELOAD) {
                 cache_purge (path);
@@ -259,7 +265,7 @@ cache_invalidate (const char* path, invalidate_parent_t touch_parent)
         }
         else if (touch_parent == IP_ADD) {
                 cache_purge (path);
-                cache_dirty_parent (path);
+                cache_add_parent (path);
         }
         else if (touch_parent == IP_DELETE)
                 cache_add_nullpath (path);
@@ -453,6 +459,11 @@ cache_getattr (const char* path, struct stat* stbuf)
                 cache_add_attr (path, stbuf, wrctr);
 
 end:
+
+        gf_log ("fuse-cache", GF_LOG_INFO,
+                "dddddddddd cache_getattr() (%d,%s)",
+                err, path);
+
         return err;
 }
 
@@ -525,7 +536,12 @@ cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
                         if (subnode && !subnode->nullpath) {
                                 filler (h, *dir, 0, 0);
                         }
+
+#if 0
+                gf_log ("fuse-cache", GF_LOG_INFO,
+                        "aaaaaa cache_getdir() (%s)", fullpath);
                         g_free (fullpath);
+#endif /* NEVER */
                 }
                 uv_mutex_unlock (&cache.lock);
                 return 0;
@@ -683,6 +699,15 @@ cache_write (const char* path, const char* buf, size_t size, off_t offset,
         int res = cache.next_oper->oper.write (path, buf, size, offset, fi);
         if (res >= 0)
                 cache_invalidate_write (path);
+        return res;
+}
+
+static int
+cache_flush (const char* path, struct fuse_file_info* fi)
+{
+        int res = cache.next_oper->oper.flush (path, fi);
+        if (res >= 0)
+                cache_invalidate (path, IP_NODO);
         return res;
 }
 

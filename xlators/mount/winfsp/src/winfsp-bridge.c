@@ -27,29 +27,6 @@ winfsp_lookup (xlator_t* this, ino_t parent, char* bname)
 
         priv = this->private;
 
-#if 0 //
-        uv_mutex_lock (&priv->msg_mutex);
-        {
-                winfsp_msg_t *tt, *n;
-                list_for_each_entry_safe (tt, n, &priv->msg_list, list)
-                {
-                        if (FUSE_LOOKUP == tt->type) {
-                                winfsp_lookup_t* p2 =
-                                  (winfsp_lookup_t*)tt->args;
-                                if (parent == p2->parent &&
-                                    strcasecmp (bname, p2->basename) == 0) {
-                                        omit = 1;
-                                        break;
-                                }
-                        }
-                }
-        }
-        uv_mutex_unlock (&priv->msg_mutex);
-
-        if (omit)
-                return;
-#endif /* NEVER */
-
         msg = winfsp_get_req (THIS, FUSE_LOOKUP, sizeof (winfsp_lookup_t));
         if (msg == NULL)
                 return;
@@ -60,6 +37,32 @@ winfsp_lookup (xlator_t* this, ino_t parent, char* bname)
         params->this = this;
         params->parent = parent;
         params->basename = sh_strdup (bname);
+        params->path = NULL;
+
+        winfsp_send_req (msg);
+}
+
+static void
+winfsp_lookup_2 (xlator_t* this, char* path)
+{
+        fuse_private_t* priv = NULL;
+        int omit = 0;
+        winfsp_msg_t* msg = NULL;
+        winfsp_lookup_t* params = NULL;
+
+        priv = this->private;
+
+        msg = winfsp_get_req (THIS, FUSE_LOOKUP, sizeof (winfsp_lookup_t));
+        if (msg == NULL)
+                return;
+
+        msg->autorelease = _gf_true;
+
+        params = (winfsp_lookup_t*)msg->args;
+        params->this = this;
+        params->parent = 0;
+        params->basename = NULL;
+        params->path = sh_strdup (path);
 
         winfsp_send_req (msg);
 }
@@ -184,10 +187,12 @@ winfsp_readlink (const char* path, char* buf, size_t size)
 static int
 winfsp_mknod (const char* path, mode_t mode, dev_t rdev)
 {
+        xlator_t* this = THIS;
         winfsp_msg_t* msg = NULL;
         winfsp_mknod_t* params = NULL;
+        int ret = -1;
 
-        msg = winfsp_get_req (THIS, FUSE_MKNOD, sizeof (winfsp_mknod_t));
+        msg = winfsp_get_req (this, FUSE_MKNOD, sizeof (winfsp_mknod_t));
         if (msg == NULL)
                 return -1;
 
@@ -198,16 +203,24 @@ winfsp_mknod (const char* path, mode_t mode, dev_t rdev)
 
         winfsp_send_req (msg);
 
-        return winfsp_get_result_and_cleanup (msg);
+        ret = winfsp_get_result (msg);
+
+        winfsp_lookup_2 (this, path);
+
+        winfsp_cleanup_req (msg);
+
+        return ret;
 }
 
 static int
 winfsp_mkdir (const char* path, mode_t mode)
 {
+        xlator_t* this = THIS;
         winfsp_msg_t* msg = NULL;
         winfsp_mkdir_t* params = NULL;
+        int ret = -1;
 
-        msg = winfsp_get_req (THIS, FUSE_MKDIR, sizeof (winfsp_mkdir_t));
+        msg = winfsp_get_req (this, FUSE_MKDIR, sizeof (winfsp_mkdir_t));
         if (msg == NULL)
                 return -1;
 
@@ -217,7 +230,13 @@ winfsp_mkdir (const char* path, mode_t mode)
 
         winfsp_send_req (msg);
 
-        return winfsp_get_result_and_cleanup (msg);
+        ret = winfsp_get_result (msg);
+
+        winfsp_lookup_2 (this, path);
+
+        winfsp_cleanup_req (msg);
+
+        return ret;
 }
 
 static int
@@ -259,10 +278,12 @@ winfsp_rmdir (const char* path)
 static int
 winfsp_symlink (const char* from, const char* to)
 {
+        xlator_t* this = THIS;
         winfsp_msg_t* msg = NULL;
         winfsp_symlink_t* params = NULL;
+        int ret = -1;
 
-        msg = winfsp_get_req (THIS, FUSE_RMDIR, sizeof (winfsp_symlink_t));
+        msg = winfsp_get_req (this, FUSE_RMDIR, sizeof (winfsp_symlink_t));
         if (msg == NULL)
                 return -1;
 
@@ -272,16 +293,25 @@ winfsp_symlink (const char* from, const char* to)
 
         winfsp_send_req (msg);
 
-        return winfsp_get_result_and_cleanup (msg);
+        ret = winfsp_get_result (msg);
+
+        winfsp_lookup_2 (this, from);
+        winfsp_lookup_2 (this, to);
+
+        winfsp_cleanup_req (msg);
+
+        return ret;
 }
 
 static int
 winfsp_rename (const char* from, const char* to)
 {
+        xlator_t* this = THIS;
         winfsp_msg_t* msg = NULL;
         winfsp_rename_t* params = NULL;
+        int ret = -1;
 
-        msg = winfsp_get_req (THIS, FUSE_RENAME, sizeof (winfsp_rename_t));
+        msg = winfsp_get_req (this, FUSE_RENAME, sizeof (winfsp_rename_t));
         if (msg == NULL)
                 return -1;
 
@@ -291,16 +321,25 @@ winfsp_rename (const char* from, const char* to)
 
         winfsp_send_req (msg);
 
-        return winfsp_get_result_and_cleanup (msg);
+        ret = winfsp_get_result (msg);
+
+        winfsp_lookup_2 (this, from);
+        winfsp_lookup_2 (this, to);
+
+        winfsp_cleanup_req (msg);
+
+        return ret;
 }
 
 static int
 winfsp_link (const char* from, const char* to)
 {
+        xlator_t* this = THIS;
         winfsp_msg_t* msg = NULL;
         winfsp_link_t* params = NULL;
+        int ret = -1;
 
-        msg = winfsp_get_req (THIS, FUSE_LINK, sizeof (winfsp_link_t));
+        msg = winfsp_get_req (this, FUSE_LINK, sizeof (winfsp_link_t));
         if (msg == NULL)
                 return -1;
 
@@ -310,16 +349,25 @@ winfsp_link (const char* from, const char* to)
 
         winfsp_send_req (msg);
 
-        return winfsp_get_result_and_cleanup (msg);
+        ret = winfsp_get_result (msg);
+
+        winfsp_lookup_2 (this, from);
+        winfsp_lookup_2 (this, to);
+
+        winfsp_cleanup_req (msg);
+
+        return ret;
 }
 
 static int
 winfsp_create (const char* path, mode_t mode, struct fuse_file_info* fi)
 {
+        xlator_t* this = THIS;
         winfsp_msg_t* msg = NULL;
         winfsp_create_t* params = NULL;
+        int ret = -1;
 
-        msg = winfsp_get_req (THIS, FUSE_CREATE, sizeof (winfsp_create_t));
+        msg = winfsp_get_req (this, FUSE_CREATE, sizeof (winfsp_create_t));
         if (msg == NULL)
                 return -1;
 
@@ -330,7 +378,13 @@ winfsp_create (const char* path, mode_t mode, struct fuse_file_info* fi)
 
         winfsp_send_req (msg);
 
-        return winfsp_get_result_and_cleanup (msg);
+        ret = winfsp_get_result (msg);
+
+        winfsp_lookup_2 (this, path);
+
+        winfsp_cleanup_req (msg);
+
+        return ret;
 }
 
 static int

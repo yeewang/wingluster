@@ -184,6 +184,7 @@ typedef struct
 typedef struct
 {
         xlator_t* this;
+        const char *path;
         ino_t parent;
         const char* basename;
 } winfsp_lookup_t;
