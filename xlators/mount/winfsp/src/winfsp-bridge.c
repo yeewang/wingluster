@@ -1326,7 +1326,7 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
         winfsp_autorelease_t* args = NULL;
         int notify = 0;
 
-#ifdef DEBUG
+#if 0
         gf_log (this->name, GF_LOG_INFO,
                 "fuse return message %p type: %d, unique: %lu, ret: %d %s", msg,
                 msg->type, msg->unique, ret, ret != 0 ? strerror(-ret) : "");
@@ -1407,12 +1407,13 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
 
                         if (notify)
                                 uv_sem_post (&priv->msg_sem);
+
+
+                        if (!msg->autorelease) {
+                                uv_cond_signal (&msg->cond);
+                        }
                 }
                 uv_mutex_unlock (&priv->msg_mutex);
-
-                if (!msg->autorelease) {
-                        uv_cond_signal (&msg->cond);
-                }
         }
         uv_mutex_unlock (&msg->mutex);
 

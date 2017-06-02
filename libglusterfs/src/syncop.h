@@ -8,6 +8,10 @@
   cases as published by the Free Software Foundation.
 */
 
+#ifdef GF_CYGWIN_HOST_OS
+#include "syncop-win32.h"
+#else
+
 #ifndef _SYNCOP_H
 #define _SYNCOP_H
 
@@ -517,3 +521,5 @@ int
 syncop_fxattrop (xlator_t *subvol, fd_t *fd, gf_xattrop_flags_t flags,
                  dict_t *dict, dict_t *xdata_in, dict_t **xdata_out);
 #endif /* _SYNCOP_H */
+#endif
+

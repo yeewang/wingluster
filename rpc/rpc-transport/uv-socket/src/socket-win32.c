@@ -1003,7 +1003,11 @@ __socket_ioq_new (rpc_transport_t* this, rpc_transport_msg_t* msg)
                         "msg size (%u) bigger than the maximum allowed size on "
                         "sockets (%u)",
                         size, RPC_MAX_FRAGMENT_SIZE);
+#ifndef USE_IOBUF
                 GF_FREE (entry);
+#else
+                iobuf_unref (entry);
+#endif /* USE_IOBUF */
                 return NULL;
         }
 
@@ -1041,6 +1045,7 @@ __socket_ioq_new (rpc_transport_t* this, rpc_transport_msg_t* msg)
                 entry->iobref = iobref_new ();
 #endif /* USE_IOBUF */
         iobref_add (entry->iobref, iobuf);
+        iobuf_unref (iobuf);
 
         INIT_LIST_HEAD (&entry->list);
 
@@ -2788,7 +2793,6 @@ socket_write_directly (rpc_transport_t* this)
                 GF_ASSERT (written == size);
 #endif /* DEBUG */
 
-                list_del (&write_q->list);
                 __socket_ioq_entry_free (write_q);
                 this->total_bytes_write += size;
         }
@@ -2802,7 +2806,7 @@ static int
 socket_write_simultaneous (rpc_transport_t* this)
 {
         socket_private_t* priv = NULL;
-        int max = 4;
+        int max = 3;
         int empty = 0;
 
         priv = this->private;
@@ -2913,7 +2917,6 @@ socket_do_kill (rpc_transport_t* this)
 
         list_for_each_entry_safe (write_q, n, &priv->write_q, list)
         {
-                list_del (write_q);
                 //-- pthread_mutex_lock (&priv->lock);
                 {
                         __socket_ioq_entry_free (write_q);
@@ -3386,6 +3389,10 @@ __socket_handle_init (uv_loop_t* loop, rpc_transport_t* this)
                 /* If client wants ENOENT to be ignored */
                 ign_enoent = dict_get_str_boolean (
                   this->options, "transport.socket.ignore-enoent", _gf_false);
+
+                uv_tcp_nodelay (&priv->handle, 0);
+
+                uv_tcp_simultaneous_accepts (&priv->handle, 1);
 
 #ifdef NEVER
                 uv_send_buffer_size ((uv_handle_t*)&priv->handle,

@@ -34,7 +34,7 @@ struct iobuf_init_config gf_iobuf_init_config[] = {
         {32 * 1024, 16},
         {128 * 1024, 16},
         {256 * 1024, 16},
-        {1 * 1024 * 1024, 8},
+        {1 * 1024 * 1024, 4},
 };
 
 int
@@ -161,7 +161,7 @@ __iobuf_arena_destroy (struct iobuf_pool *iobuf_pool,
                 munmap (iobuf_arena->mem_base, iobuf_arena->arena_size);
 #else
 	if (iobuf_arena->mem_base)
-		sh_free_poll (iobuf_arena->mem_base);
+		sh_free_pool (iobuf_arena->mem_base, iobuf_arena->arena_size);
 #endif /* GF_CYGWIN_HOST_OS */
 
         GF_FREE (iobuf_arena);

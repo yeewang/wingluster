@@ -25,7 +25,7 @@
 #define DEFAULT_CACHE_STAT_TIMEOUT_SECS (5 * 60)
 #define DEFAULT_CACHE_DIR_TIMEOUT_SECS 60
 #define DEFAULT_CACHE_LINK_TIMEOUT_SECS 20
-#define DEFAULT_MAX_CACHE_SIZE (2 * 1024 * 1024)
+#define DEFAULT_MAX_CACHE_SIZE (1024 * 1024)
 #define DEFAULT_CACHE_CLEAN_INTERVAL_SECS 60
 #define DEFAULT_MIN_CACHE_CLEAN_INTERVAL_SECS 5
 
@@ -50,8 +50,8 @@ static struct cache cache;
 
 struct node
 {
-        struct stat stat;
-        char** dir;
+        struct fuse_stat stat;
+        GList *dir;
         time_t dir_valid;
         char* link;
         time_t link_valid;
@@ -64,7 +64,7 @@ struct fuse_cache_dirhandle
         const char* path;
         fuse_dirh_t h;
         fuse_dirfil_t filler;
-        GPtrArray* dir;
+        GList* dir;
         uint64_t wrctr;
 };
 
@@ -99,13 +99,35 @@ static void
 cache_node_changed (const char* path);
 
 static void
-cache_add_dir (const char* path, char** dir);
+cache_add_dir (const char* path, GList* dir);
+
+static void
+cache_add_path (const char* path, const char* name);
+
+static void
+cache_del_path (const char* path, const char* name);
+
+static void
+free_dir (GList *dir)
+{
+        GList *t, *n;
+        if (dir) {
+                t = dir;
+                while (t != NULL) {
+                        n = t->next;
+                        g_free (t->data);
+                        dir = g_list_delete_link (dir, t);
+                        t = n;
+                }
+        }
+}
 
 static void
 free_node (gpointer node_)
 {
         struct node* node = (struct node*)node_;
-        g_strfreev (node->dir);
+        free_dir (node->dir);
+        g_free (node->link);
         g_free (node);
 }
 
@@ -175,10 +197,6 @@ cache_dirty_parent (const char* path)
                         node->dir_valid  = 0;
                         g_free (parent);
                 }
-
-                        gf_log ("fuse-cache", GF_LOG_INFO,
-                "cccccccccccccc dirty_parent() (%s)",
-                path);
         }
 }
 
@@ -210,9 +228,7 @@ cache_add_parent (const char* path)
 {
         char* parent = NULL;
         struct node* pnode = NULL;
-        char** dir;
         const char* name;
-        GPtrArray* newdir;
         const char* s = strrchr (path, '/');
         if (s) {
                 if (s == path) {
@@ -232,17 +248,40 @@ cache_add_parent (const char* path)
                 return;
         }
 
-        newdir = g_ptr_array_new ();
-        if (pnode->dir != NULL)
-                for (dir = pnode->dir; *dir != NULL; dir++) {
-                        g_ptr_array_add (newdir, g_strdup (*dir));
-                }
-        g_ptr_array_add (newdir, g_strdup (name));
-        g_ptr_array_add (newdir, NULL);
-        cache_add_dir (parent, (char**)newdir->pdata);
-        g_ptr_array_free (newdir, FALSE);
+        cache_add_path (parent, name);
 
         /* does not insert self node! */
+
+        if (parent)
+                g_free (parent);
+}
+
+static void
+cache_del_parent (const char* path)
+{
+        char* parent = NULL;
+        struct node* pnode = NULL;
+        const char* name;
+        const char* s = strrchr (path, '/');
+        if (s) {
+                if (s == path) {
+                        parent = g_strdup ("/");
+                        pnode = cache_lookup (parent);
+                } else {
+                        parent = g_strndup (path, s - path);
+                        pnode = cache_lookup (parent);
+                }
+        }
+        name = s + 1;
+
+        if (pnode == NULL) {
+                cache_node_changed (path);
+                if (parent)
+                        g_free (parent);
+                return;
+        }
+
+        cache_del_path (parent, name);
 
         if (parent)
                 g_free (parent);
@@ -267,8 +306,10 @@ cache_invalidate (const char* path, invalidate_parent_t touch_parent)
                 cache_purge (path);
                 cache_add_parent (path);
         }
-        else if (touch_parent == IP_DELETE)
+        else if (touch_parent == IP_DELETE) {
                 cache_add_nullpath (path);
+                cache_del_parent (path);
+        }
         uv_mutex_unlock (&cache.lock);
 }
 
@@ -328,7 +369,7 @@ cache_get (const char* path)
 }
 
 void
-cache_add_attr (const char* path, const struct stat* stbuf, uint64_t wrctr)
+cache_add_attr (const char* path, const struct fuse_stat* stbuf, uint64_t wrctr)
 {
         struct node* node;
 
@@ -349,14 +390,57 @@ cache_add_attr (const char* path, const struct stat* stbuf, uint64_t wrctr)
 }
 
 static void
-cache_add_dir (const char* path, char** dir)
+cache_add_dir (const char* path, GList* dir)
 {
         struct node* node;
 
         uv_mutex_lock (&cache.lock);
         node = cache_get (path);
-        g_strfreev (node->dir);
+        free_dir (node->dir);
         node->dir = dir;
+        node->dir_valid = time (NULL) + cache.dir_timeout_secs;
+        if (node->dir_valid > node->valid)
+                node->valid = node->dir_valid;
+        cache_clean ();
+        uv_mutex_unlock (&cache.lock);
+}
+
+static gint
+compare_filename (gconstpointer a,
+                  gconstpointer b)
+{
+        return strcmp (a, b);
+}
+
+static void
+cache_add_path (const char* path, const char* name)
+{
+        struct node* node;
+
+        uv_mutex_lock (&cache.lock);
+        node = cache_get (path);
+        node->dir = g_list_append (node->dir, g_strdup (name));
+        node->dir_valid = time (NULL) + cache.dir_timeout_secs;
+        if (node->dir_valid > node->valid)
+                node->valid = node->dir_valid;
+        cache_clean ();
+        uv_mutex_unlock (&cache.lock);
+}
+
+static void
+cache_del_path (const char* path, const char* name)
+{
+        GList * filename_node;
+        struct node* node;
+
+        uv_mutex_lock (&cache.lock);
+        node = cache_get (path);
+
+        filename_node = g_list_find_custom (node->dir, name, compare_filename);
+        if (filename_node) {
+                g_free (filename_node->data);
+                node->dir = g_list_delete_link  (node->dir, filename_node);
+        }
         node->dir_valid = time (NULL) + cache.dir_timeout_secs;
         if (node->dir_valid > node->valid)
                 node->valid = node->dir_valid;
@@ -396,8 +480,7 @@ cache_add_nullpath (const char* path)
 
         uv_mutex_lock (&cache.lock);
         node = cache_get (path);
-        if (node->dir)
-                g_strfreev (node->dir);
+        free_dir (node->dir);
         node->dir = NULL;
         node->nullpath = 1;
         time_t stat_valid = time (NULL) + cache.empty_timeout_secs;
@@ -407,7 +490,7 @@ cache_add_nullpath (const char* path)
 }
 
 static int
-cache_get_attr (const char* path, struct stat* stbuf)
+cache_get_attr (const char* path, struct fuse_stat* stbuf)
 {
         struct node* node;
         int err = -EAGAIN;
@@ -441,7 +524,7 @@ cache_get_write_ctr (void)
 }
 
 static int
-cache_getattr (const char* path, struct stat* stbuf)
+cache_getattr (const char* path, struct fuse_stat* stbuf)
 {
         int err = cache_get_attr (path, stbuf);
         if (err == -ENOENT)
@@ -460,9 +543,11 @@ cache_getattr (const char* path, struct stat* stbuf)
 
 end:
 
+#if 0
         gf_log ("fuse-cache", GF_LOG_INFO,
-                "dddddddddd cache_getattr() (%d,%s)",
-                err, path);
+                "dddddddddd cache_getattr() (%d,%s),mode=%o,size=%d,uid|gid=%d|%d",
+                err, path, stbuf->st_mode, stbuf->st_size,stbuf->st_uid,stbuf->st_gid);
+#endif /* NEVER */
 
         return err;
 }
@@ -493,11 +578,12 @@ cache_readlink (const char* path, char* buf, size_t size)
 }
 
 static int
-cache_dirfill (fuse_cache_dirh_t ch, const char* name, const struct stat* stbuf)
+cache_dirfill (fuse_cache_dirh_t ch, const char* name,
+               const struct fuse_stat* stbuf)
 {
         int err = ch->filler (ch->h, name, 0, 0);
         if (!err) {
-                g_ptr_array_add (ch->dir, g_strdup (name));
+                ch->dir = g_list_append (ch->dir, g_strdup (name));
                 if (stbuf->st_mode & S_IFMT) {
                         char* fullpath;
                         const char* basepath = !ch->path[1] ? "" : ch->path;
@@ -515,8 +601,14 @@ cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
 {
         struct fuse_cache_dirhandle ch;
         int err = 0;
-        char** dir;
+        GList* dir;
         struct node* node;
+        int dir_count = 0;
+
+#if 0
+                        gf_log ("fuse-cache", GF_LOG_INFO,
+                                "uuuuu cache_getdir() (%s)", path);
+#endif /* NEVER */
 
         uv_mutex_lock (&cache.lock);
         node = cache_lookup (path);
@@ -528,23 +620,37 @@ cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
                         cache_node_changed (path);
 
                 const char* basepath = !path[1] ? "" : path;
-                for (dir = node->dir; *dir != NULL; dir++) {
+
+                dir = node->dir;
+                while (dir != NULL) {
                         struct node* subnode;
                         char* fullpath;
-                        fullpath = g_strdup_printf ("%s/%s", basepath, *dir);
+                        fullpath = g_strdup_printf ("%s/%s", basepath,
+                                                    (char*)dir->data);
                         subnode = cache_lookup (fullpath);
                         if (subnode && !subnode->nullpath) {
-                                filler (h, *dir, 0, 0);
+                                if (strcmp(basepath, ".") != 0 &&
+                                    strcmp(basepath, "..") != 0) {
+                                        dir_count++;
+                                        filler (h, (char*)dir->data, 0, 0);
+                                }
                         }
 
 #if 0
-                gf_log ("fuse-cache", GF_LOG_INFO,
-                        "aaaaaa cache_getdir() (%s)", fullpath);
-                        g_free (fullpath);
+                        gf_log ("fuse-cache", GF_LOG_INFO,
+                                "aaaaaa cache_getdir() (%s)", fullpath);
 #endif /* NEVER */
+                        g_free (fullpath);
+
+                        dir = dir->next;
                 }
-                uv_mutex_unlock (&cache.lock);
-                return 0;
+
+                if (dir_count > 0) {
+                        filler (h, ".", 0, 0);
+                        filler (h, "..", 0, 0);
+                        uv_mutex_unlock (&cache.lock);
+                        return 0;
+                }
         }
 unlock:
         uv_mutex_unlock (&cache.lock);
@@ -552,22 +658,19 @@ unlock:
         ch.path = path;
         ch.h = h;
         ch.filler = filler;
-        ch.dir = g_ptr_array_new ();
+        ch.dir = NULL;
         ch.wrctr = cache_get_write_ctr ();
         err = cache.next_oper->cache_getdir (path, &ch, cache_dirfill);
-        g_ptr_array_add (ch.dir, NULL);
-        dir = (char**)ch.dir->pdata;
         if (!err)
-                cache_add_dir (path, dir);
+                cache_add_dir (path, ch.dir);
         else
-                g_strfreev (dir);
-        g_ptr_array_free (ch.dir, FALSE);
+                free_dir (ch.dir);
         return err;
 }
 
 static int
 cache_unity_dirfill (fuse_cache_dirh_t ch, const char* name,
-                     const struct stat* stbuf)
+                     const struct fuse_stat* stbuf)
 {
         (void)stbuf;
         return ch->filler (ch->h, name, 0, 0);
@@ -609,7 +712,7 @@ cache_unlink (const char* path)
                 cache_add_nullpath (path);
         }
         if (!err)
-                cache_invalidate (path, IP_RELOAD);
+                cache_invalidate (path, IP_DELETE);
         return err;
 }
 
@@ -621,7 +724,7 @@ cache_rmdir (const char* path)
                 cache_add_nullpath (path);
         }
         if (!err)
-                cache_invalidate (path, IP_RELOAD);
+                cache_invalidate (path, IP_DELETE);
         return err;
 }
 
@@ -749,7 +852,7 @@ cache_ftruncate (const char* path, off_t size, struct fuse_file_info* fi)
 }
 
 static int
-cache_fgetattr (const char* path, struct stat* stbuf, struct fuse_file_info* fi)
+cache_fgetattr (const char* path, struct fuse_stat* stbuf, struct fuse_file_info* fi)
 {
         int err = cache_get_attr (path, stbuf);
         if (err) {
@@ -767,21 +870,17 @@ fill_cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
 {
         struct fuse_cache_dirhandle ch;
         int err;
-        char** dir;
 
         ch.path = path;
         ch.h = h;
         ch.filler = filler;
-        ch.dir = g_ptr_array_new ();
+        ch.dir = NULL;
         ch.wrctr = cache_get_write_ctr ();
         err = cache.next_oper->cache_getdir (path, &ch, cache_dirfill);
-        g_ptr_array_add (ch.dir, NULL);
-        dir = (char**)ch.dir->pdata;
         if (!err)
-                cache_add_dir (path, dir);
+                cache_add_dir (path, ch.dir);
         else
-                g_strfreev (dir);
-        g_ptr_array_free (ch.dir, FALSE);
+                free_dir (ch.dir);
         return err;
 }
 

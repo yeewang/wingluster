@@ -3556,6 +3556,11 @@ out:
 char *
 gf_backtrace_save (char *buf)
 {
+#ifdef GF_CYGWIN_HOST_OS
+        /* remove unsafe call to __builtin_frame_address */
+        gf_msg (THIS->name, GF_LOG_WARNING, 0, LG_MSG_BACKTRACE_SAVE_FAILED,
+                "The backtrace occurs.");
+#else
         char *bt = NULL;
 
         if (!buf) {
@@ -3572,6 +3577,7 @@ gf_backtrace_save (char *buf)
 
         gf_msg (THIS->name, GF_LOG_WARNING, 0, LG_MSG_BACKTRACE_SAVE_FAILED,
                 "Failed to save the backtrace.");
+#endif /* GF_CYGWIN_HOST_OS */
         return NULL;
 }
 

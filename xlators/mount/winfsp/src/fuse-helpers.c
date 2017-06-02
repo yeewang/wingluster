@@ -537,8 +537,8 @@ gf_fuse_stat2winstat (struct iatt* st, struct fuse_stat* stbuf)
 
         stbuf->st_blksize = st->ia_blksize;
         stbuf->st_blocks = st->ia_blocks;
-        stbuf->st_birthtim.tv_sec = -1;
-        stbuf->st_birthtim.tv_nsec = -1;
+        stbuf->st_birthtim.tv_sec = stbuf->st_mtim.tv_sec;
+        stbuf->st_birthtim.tv_nsec = stbuf->st_mtim.tv_nsec;
 }
 
 void
@@ -561,8 +561,8 @@ gf_fuse_attr2winstat (struct fuse_attr* fa, struct stat* stbuf)
 
         stbuf->st_blksize = fa->blksize;
         stbuf->st_blocks = fa->blocks;
-        stbuf->st_birthtim.tv_sec = -1;
-        stbuf->st_birthtim.tv_nsec = -1;
+        stbuf->st_birthtim.tv_sec = stbuf->st_mtim.tv_sec;
+        stbuf->st_birthtim.tv_nsec = stbuf->st_mtim.tv_nsec;
 }
 
 void

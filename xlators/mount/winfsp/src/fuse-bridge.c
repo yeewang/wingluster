@@ -586,7 +586,7 @@ fuse_lookup (xlator_t* this, winfsp_msg_t* msg)
         fuse_resolve_entry_init (state, &state->resolve, finh->nodeid,
                                  bname);
 
-        gf_log ("glusterfs-fuse", GF_LOG_INFO,
+        gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
                 "%" PRIu64 ": LOOKUP path: %s, name: %s",
                 msg->unique, path, bname);
 
@@ -979,9 +979,10 @@ fuse_setattr_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                 if (state->truncate_needed) {
                         fuse_do_truncate (state);
                 } else {
-                        winfsp_send_result (this, state->stub, 0);
                         op_done = 1;
                 }
+
+                winfsp_send_result (this, state->stub, 0);
         } else {
                 gf_log ("glusterfs-fuse", GF_LOG_WARNING,
                         "%" PRIu64 ": %s() %s => -1 (%s)", frame->root->unique,
@@ -5090,7 +5091,7 @@ fuse_flush_write_cache (fuse_private_t* priv)
         write_msg->autorelease = _gf_true;
         params = (winfsp_write_ex_t*)write_msg->args;
         params->path = NULL;
-        params->buf = iobuf_ref (priv->write_cache.iobuf);
+        params->buf = priv->write_cache.iobuf;
         params->size = priv->write_cache.size;
         params->offset = priv->write_cache.offset;
         params->handle = priv->write_cache.handle;
@@ -5338,7 +5339,8 @@ fuse_thread_proc (void* data)
                                 "fuse recieved message type: %d, unique: %lu, "
                                 "parent: %" PRIu64 ", path:%s, basepath: %s",
                                 msg->type, msg->unique, args->parent,
-                                args->path, args->basename);
+                                args->path ? args->path : "",
+                                args->basename ? args->basename : "");
                 } else if (msg->type == FUSE_AUTORELEASE) {
 
                 } else if (msg->type == FUSE_READ) {
