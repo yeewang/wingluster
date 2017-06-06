@@ -117,6 +117,7 @@ typedef struct
         off_t offset;
         struct fuse_file_info* fi;
 
+        off_t out_off;
         char* out_buf;
         size_t out_size;
 } winfsp_readdirp_t;

@@ -281,6 +281,12 @@ cache_del_parent (const char* path)
                 return;
         }
 
+#ifdef NEVER
+        gf_log ("fuse-cache", GF_LOG_INFO,
+                "rrrrr cache_del_parent() (%s,%s)",
+                parent, name);
+#endif /* NEVER */
+
         cache_del_path (parent, name);
 
         if (parent)
@@ -307,7 +313,7 @@ cache_invalidate (const char* path, invalidate_parent_t touch_parent)
                 cache_add_parent (path);
         }
         else if (touch_parent == IP_DELETE) {
-                cache_add_nullpath (path);
+                cache_purge (path);
                 cache_del_parent (path);
         }
         uv_mutex_unlock (&cache.lock);
@@ -417,14 +423,14 @@ cache_add_path (const char* path, const char* name)
 {
         struct node* node;
 
-        uv_mutex_lock (&cache.lock);
         node = cache_get (path);
-        node->dir = g_list_append (node->dir, g_strdup (name));
-        node->dir_valid = time (NULL) + cache.dir_timeout_secs;
-        if (node->dir_valid > node->valid)
-                node->valid = node->dir_valid;
+        if (node->dir) { /* only append the node was fetched by getdir() */
+                node->dir = g_list_prepend (node->dir, g_strdup (name));
+                node->dir_valid = time (NULL) + cache.dir_timeout_secs;
+                if (node->dir_valid > node->valid)
+                        node->valid = node->dir_valid;
+        }
         cache_clean ();
-        uv_mutex_unlock (&cache.lock);
 }
 
 static void
@@ -433,7 +439,6 @@ cache_del_path (const char* path, const char* name)
         GList * filename_node;
         struct node* node;
 
-        uv_mutex_lock (&cache.lock);
         node = cache_get (path);
 
         filename_node = g_list_find_custom (node->dir, name, compare_filename);
@@ -445,7 +450,6 @@ cache_del_path (const char* path, const char* name)
         if (node->dir_valid > node->valid)
                 node->valid = node->dir_valid;
         cache_clean ();
-        uv_mutex_unlock (&cache.lock);
 }
 
 static size_t
@@ -536,7 +540,7 @@ cache_getattr (const char* path, struct fuse_stat* stbuf)
         uint64_t wrctr = cache_get_write_ctr ();
         err = cache.next_oper->oper.getattr (path, stbuf);
         if (err == -ENOENT) {
-                cache_add_nullpath (path);
+                cache_invalidate (path, IP_DELETE);
         }
         else if (!err)
                 cache_add_attr (path, stbuf, wrctr);
@@ -577,13 +581,21 @@ cache_readlink (const char* path, char* buf, size_t size)
         return err;
 }
 
+static int fc;
+
 static int
 cache_dirfill (fuse_cache_dirh_t ch, const char* name,
                const struct fuse_stat* stbuf)
 {
+
+#if 0
+                gf_log ("fuse-cache", GF_LOG_INFO,
+                        "vvvvv cache_dirfill(%d) (%s)", ++fc, name);
+#endif /* NEVER */
+
         int err = ch->filler (ch->h, name, 0, 0);
         if (!err) {
-                ch->dir = g_list_append (ch->dir, g_strdup (name));
+                ch->dir = g_list_prepend (ch->dir, g_strdup (name));
                 if (stbuf->st_mode & S_IFMT) {
                         char* fullpath;
                         const char* basepath = !ch->path[1] ? "" : ch->path;
@@ -627,14 +639,18 @@ cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
                         char* fullpath;
                         fullpath = g_strdup_printf ("%s/%s", basepath,
                                                     (char*)dir->data);
+#ifdef NEVER
                         subnode = cache_lookup (fullpath);
                         if (subnode && !subnode->nullpath) {
-                                if (strcmp(basepath, ".") != 0 &&
-                                    strcmp(basepath, "..") != 0) {
-                                        dir_count++;
+                                //if (strcmp(basepath, ".") != 0 &&
+                                //    strcmp(basepath, "..") != 0) {
+                                //        dir_count++;
                                         filler (h, (char*)dir->data, 0, 0);
-                                }
+                                //}
                         }
+#endif /* NEVER */
+
+                        filler (h, (char*)dir->data, 0, 0);
 
 #if 0
                         gf_log ("fuse-cache", GF_LOG_INFO,
@@ -645,15 +661,17 @@ cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
                         dir = dir->next;
                 }
 
-                if (dir_count > 0) {
-                        filler (h, ".", 0, 0);
-                        filler (h, "..", 0, 0);
+                //if (dir_count > 0) {
+                //        filler (h, ".", 0, 0);
+                //        filler (h, "..", 0, 0);
                         uv_mutex_unlock (&cache.lock);
                         return 0;
-                }
+                //}
         }
 unlock:
         uv_mutex_unlock (&cache.lock);
+
+        fc = 0;
 
         ch.path = path;
         ch.h = h;
@@ -708,9 +726,11 @@ static int
 cache_unlink (const char* path)
 {
         int err = cache.next_oper->oper.unlink (path);
+#ifdef NEVER
         if (err == 0 || err == -ENOENT) {
                 cache_add_nullpath (path);
         }
+#endif /* NEVER */
         if (!err)
                 cache_invalidate (path, IP_DELETE);
         return err;
@@ -720,9 +740,11 @@ static int
 cache_rmdir (const char* path)
 {
         int err = cache.next_oper->oper.rmdir (path);
+#ifdef NEVER
         if (err == 0 || err == -ENOENT) {
                 cache_add_nullpath (path);
         }
+#endif /* NEVER */
         if (!err)
                 cache_invalidate (path, IP_DELETE);
         return err;

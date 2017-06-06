@@ -2991,6 +2991,7 @@ fuse_readdirp_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                 "%" PRIu64 ": READDIRP => %d/%" GF_PRI_SIZET ",%" PRId64,
                 frame->root->unique, op_ret, state->size, state->off);
 
+        int ct = 0;
         list_for_each_entry (entry, &entries->list, list)
         {
                 size_t fdes = FUSE_DIRENT_ALIGN (FUSE_NAME_OFFSET_DIRENTPLUS +
@@ -3084,9 +3085,10 @@ fuse_readdirp_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                         break;
         }
 
+        rd_stub->out_off = entry->d_off;
         rd_stub->out_size = max_size;
 
-        winfsp_send_result (this, stub, 0);
+        winfsp_send_result (this, stub, op_ret);
 out:
         if (need_closefd) {
                 uint64_t val = 0;
@@ -3130,64 +3132,6 @@ fuse_readdirp_resume (fuse_state_t* state)
                   state->fd, state->size, state->off, state->xdata);
 }
 
-void
-fuse_readdirp_resume_ex (fuse_state_t* state)
-{
-        if (state->fd == NULL) {
-                fd_t* fd = NULL;
-                fuse_private_t* priv = NULL;
-                fuse_fd_ctx_t* fdctx = NULL;
-                winfsp_msg_t* stub = NULL;
-
-                priv = state->this->private;
-                stub = state->stub;
-
-                if (!state->loc.inode) {
-                        gf_log ("glusterfs-fuse", GF_LOG_WARNING,
-                                "%" PRIu64 ": READDIRP (%s) resolution failed",
-                                state->finh->unique,
-                                uuid_utoa (state->resolve.gfid));
-                        winfsp_send_err (state->this, state->stub,
-                                         state->resolve.op_errno);
-                        free_fuse_state (state);
-                        return;
-                }
-
-                fd = fd_create (state->loc.inode, state->finh->pid);
-                if (fd == NULL) {
-                        gf_log ("glusterfs-fuse", GF_LOG_WARNING,
-                                "%" PRIu64 ": READDIRP fd creation failed",
-                                state->finh->unique);
-                        winfsp_send_err (state->this, state->stub, ENOMEM);
-                        free_fuse_state (state);
-                        return;
-                }
-
-                fdctx = fuse_fd_ctx_check_n_create (state->this, fd);
-                if (fdctx == NULL) {
-                        gf_log ("glusterfs-fuse", GF_LOG_WARNING,
-                                "%" PRIu64
-                                ": READDIRP creation of fdctx failed",
-                                state->finh->unique);
-                        fd_unref (fd);
-                        winfsp_send_err (state->this, state->stub, ENOMEM);
-                        free_fuse_state (state);
-                        return;
-                }
-
-                state->fd = fd_ref (fd);
-                state->fd_no = gf_fd_unused_get (priv->fdtable, fd);
-        }
-
-        gf_log ("glusterfs-fuse", GF_LOG_TRACE,
-                "%" PRIu64 ": READDIRP (%p, size=%" GF_PRI_SIZET
-                ", offset=%" PRId64 ")",
-                state->finh->unique, state->fd, state->size, state->off);
-
-        FUSE_FOP (state, fuse_readdirp_cbk, GF_FOP_READDIRP, readdirp,
-                  state->fd, state->size, state->off, state->xdata);
-}
-
 static void
 fuse_readdirp (xlator_t* this, winfsp_msg_t* msg)
 {
@@ -3205,7 +3149,7 @@ fuse_readdirp (xlator_t* this, winfsp_msg_t* msg)
                 winfsp_send_err (this, msg, EINVAL);
         }
 
-        state->size = 64 * 1024 * 1024; /* assume max of bufsize is 64MB */
+        state->size = 1024 * 1024; /* assume max of bufsize is 1MB */
         state->off = args->offset;
         state->fd = fd;
 
@@ -5333,6 +5277,7 @@ fuse_thread_proc (void* data)
 #ifdef DEBUG
 
                 if (msg->type == FUSE_LOOKUP) {
+#if 0
                         winfsp_lookup_t* args = (winfsp_lookup_t*)msg->args;
                         gf_msg (this->name, GF_LOG_INFO, 0,
                                 LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
@@ -5341,6 +5286,7 @@ fuse_thread_proc (void* data)
                                 msg->type, msg->unique, args->parent,
                                 args->path ? args->path : "",
                                 args->basename ? args->basename : "");
+#endif /* NEVER */
                 } else if (msg->type == FUSE_AUTORELEASE) {
 
                 } else if (msg->type == FUSE_READ) {
@@ -5367,7 +5313,7 @@ fuse_thread_proc (void* data)
                                 "handle=%lld, size: %lld, offset: %lld",
                                 msg->type, msg->unique, args->handle, args->size,
                                 args->offset);
-                } else {
+                } else if (msg->type != FUSE_GETATTR) {
                         winfsp_opendir_t* args = (winfsp_opendir_t*)msg->args;
                         gf_msg (this->name, GF_LOG_INFO, 0,
                                 LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,

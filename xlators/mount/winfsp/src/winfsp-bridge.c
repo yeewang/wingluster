@@ -861,12 +861,13 @@ winfsp_readdirp_ex (const char* path, void* buf, fuse_fill_dir_t filler,
         return ret;
 }
 
-static int
+static off_t
 winfsp_readdirp_cache (const char* path, fuse_cache_dirh_t* buf,
                        fuse_cache_dirfil_t filler, fuse_off_t offset,
                        struct fuse_file_info* fi)
 {
         int ret = -1;
+        off_t off = 0;
         winfsp_msg_t* msg = NULL;
         winfsp_readdirp_t* params = NULL;
         size_t size = 0;
@@ -889,6 +890,7 @@ winfsp_readdirp_cache (const char* path, fuse_cache_dirh_t* buf,
         params->filler = NULL;
         params->offset = offset;
         params->fi = fi;
+        params->out_off = 0;
         params->out_buf = NULL;
         params->out_size = 0;
 
@@ -896,7 +898,7 @@ winfsp_readdirp_cache (const char* path, fuse_cache_dirh_t* buf,
 
         ret = winfsp_get_result (msg);
 
-        if (ret == 0 && params->out_size > size && filler) {
+        if (ret > 0 && params->out_size > size && filler) {
                 struct fuse_direntplus* fde = NULL;
                 struct fuse_entry_out* feo = NULL;
                 struct stat stbuf;
@@ -914,6 +916,8 @@ winfsp_readdirp_cache (const char* path, fuse_cache_dirh_t* buf,
                         size += FUSE_DIRENT_ALIGN (FUSE_NAME_OFFSET_DIRENTPLUS +
                                                    fde->dirent.namelen + 1);
                 }
+
+                off = params->out_off;
         }
 
         if (params->out_buf != NULL)
@@ -921,7 +925,7 @@ winfsp_readdirp_cache (const char* path, fuse_cache_dirh_t* buf,
 
         winfsp_cleanup_req (msg);
 
-        return ret;
+        return ret > 0 ? off : ret;
 }
 
 static int
@@ -936,7 +940,8 @@ winfsp_readdirp (const char* path, void* buf, fuse_fill_dir_t filler,
                 ret = winfsp_opendir (path, &newfi);
 
                 if (ret == 0) {
-                        ret = winfsp_readdirp_ex (path, buf, filler, 0, &newfi);
+                        ret = winfsp_readdirp_ex (path, buf, filler, offset,
+                                                  &newfi);
 
                         winfsp_releasedir (path, &newfi);
                 }
@@ -951,13 +956,17 @@ int
 winfsp_getdir (const char* path, fuse_cache_dirh_t buf,
                fuse_cache_dirfil_t filler)
 {
+        off_t off = 0;
         int ret = 0;
 
         struct fuse_file_info fi;
         ret = winfsp_opendir (path, &fi);
 
         if (ret == 0) {
-                ret = winfsp_readdirp_cache (path, buf, filler, 0, &fi);
+                do {
+                        off = winfsp_readdirp_cache (
+                            path, buf, filler, off, &fi);
+                } while (off > 0);
 
                 winfsp_releasedir (path, &fi);
         }
@@ -1485,8 +1494,8 @@ winfsp_get_req (xlator_t* this, int type, size_t size)
 
         INIT_FUSE_HEADER (msg->finh, msg->unique, type, ctx);
 
-#ifdef NEVER
-        msg->finh->pid = 0;
+#if 1 //def NEVER
+        //msg->finh->pid = 0;
         msg->finh->uid = 0;
         msg->finh->gid = 0;
 #endif /* NEVER */
