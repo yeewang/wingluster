@@ -433,7 +433,7 @@ winfsp_read (const char* path, char* buf, size_t size, off_t offset,
 
         return ret;
 
-        //return winfsp_get_result_and_cleanup (msg);
+        // return winfsp_get_result_and_cleanup (msg);
 }
 
 static int
@@ -607,10 +607,11 @@ winfsp_write_cached (const char* path, const char* buf, size_t size,
 
                         flush = 0;
                 } else if (fi->fh == priv->write_cache.handle &&
-                    offset ==
-                      priv->write_cache.offset + priv->write_cache.size &&
-                    priv->write_cache.size + size <=
-                      iobuf_size (priv->write_cache.iobuf)) {
+                           offset ==
+                             priv->write_cache.offset +
+                               priv->write_cache.size &&
+                           priv->write_cache.size + size <=
+                             iobuf_size (priv->write_cache.iobuf)) {
                         flush = 0;
                 }
 
@@ -620,6 +621,8 @@ winfsp_write_cached (const char* path, const char* buf, size_t size,
                         t_handle = priv->write_cache.handle;
                         t_offset = priv->write_cache.offset;
                         t_size = priv->write_cache.size;
+                        priv->write_cache.iobuf = NULL;
+
                         uv_mutex_unlock (&priv->write_cache.lock);
 
                         winfsp_write_ex (this, t_path, t_iobuf, t_size,
@@ -659,8 +662,7 @@ winfsp_write (const char* path, const char* buf, size_t size, off_t offset,
 
         if (size < MAX_WRITE_PAGE) {
                 ret = winfsp_write_cached (path, buf, size, offset, fi);
-        }
-        else {
+        } else {
                 ret = winfsp_write_base (path, buf, size, offset, fi);
         }
 
@@ -964,8 +966,8 @@ winfsp_getdir (const char* path, fuse_cache_dirh_t buf,
 
         if (ret == 0) {
                 do {
-                        off = winfsp_readdirp_cache (
-                            path, buf, filler, off, &fi);
+                        off =
+                          winfsp_readdirp_cache (path, buf, filler, off, &fi);
                 } while (off > 0);
 
                 winfsp_releasedir (path, &fi);
@@ -1341,90 +1343,88 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
                 msg->type, msg->unique, ret, ret != 0 ? strerror(-ret) : "");
 #endif /* DEBUG */
 
-        uv_mutex_lock (&msg->mutex);
+        priv = this->private;
+
+        uv_mutex_lock (&priv->msg_mutex);
         {
-                msg->fin = 1;
-                msg->ret = ret;
-
-                if (msg->autorelease) {
-#ifndef USE_IOBUF
-                        release_msg =
-                          SH_CALLOC (1, sizeof (winfsp_msg_t) +
-                                          sizeof (winfsp_autorelease_t),
-                                     gf_fuse_mt_winfsp_msg_t);
-                        if (release_msg == NULL)
-                                return -1;
-#else
-                        iobuf = iobuf_get2 (this->ctx->iobuf_pool,
-                                            sizeof (winfsp_msg_t) +
-                                              sizeof (winfsp_autorelease_t));
-                        if (iobuf == NULL)
-                                return -1;
-                        release_msg = iobuf_ptr (iobuf);
-                        release_msg->iobuf = iobuf;
-#endif /* USE_IOBUF */
-                        INIT_LIST_HEAD (&release_msg->list);
-                        args = (winfsp_autorelease_t*)release_msg->args;
-                        args->msg = msg;
-
-                        release_msg->unique = get_fuse_op_unique ();
-                        release_msg->autorelease = _gf_true;
-                        release_msg->fin = 1;
-                        release_msg->ret = 0;
-                        release_msg->type = FUSE_AUTORELEASE;
-
-                        uv_mutex_init (&release_msg->mutex);
-                        uv_cond_init (&release_msg->cond);
-                }
-
-                priv = this->private;
-
-                uv_mutex_lock (&priv->msg_mutex);
+                uv_mutex_lock (&msg->mutex);
                 {
-                        if (release_msg) {
-                                list_add (&release_msg->list, &priv->msg_list);
+                        msg->fin = 1;
+                        msg->ret = ret;
 
-                                notify = 1;
-                        }
-
-                        list_for_each_entry_safe (wait_msg, n, &priv->wait_list,
-                                                  list)
-                        {
-
-                                inner_msg =
-                                  ((winfsp_waitmsg_t*)wait_msg->args)->msg;
-
-                                /*
-                                gf_log(this->name, GF_LOG_DEBUG,
-                                       "fuse try to clean message %p type: %d,
-                                unique: %lu",
-                                        inner_msg, inner_msg->type,
-                                inner_msg->unique);
-                                */
-
-                                if (inner_msg->unique == msg->unique) {
-                                        list_del_init (&wait_msg->list);
+                        if (msg->autorelease) {
 #ifndef USE_IOBUF
-                                        SH_FREE (wait_msg);
+                                release_msg =
+                                  SH_CALLOC (1, sizeof (winfsp_msg_t) +
+                                                  sizeof (winfsp_autorelease_t),
+                                             gf_fuse_mt_winfsp_msg_t);
+                                if (release_msg == NULL)
+                                        return -1;
 #else
-                                        iobuf_unref (wait_msg->iobuf);
+                                iobuf =
+                                  iobuf_get2 (this->ctx->iobuf_pool,
+                                              sizeof (winfsp_msg_t) +
+                                                sizeof (winfsp_autorelease_t));
+                                if (iobuf == NULL)
+                                        return -1;
+                                release_msg = iobuf_ptr (iobuf);
+                                release_msg->iobuf = iobuf;
 #endif /* USE_IOBUF */
-                                        notify = 1;
-                                        break;
-                                }
-                        }
+                                INIT_LIST_HEAD (&release_msg->list);
+                                args = (winfsp_autorelease_t*)release_msg->args;
+                                args->msg = msg;
 
-                        if (notify)
-                                uv_sem_post (&priv->msg_sem);
+                                release_msg->unique = get_fuse_op_unique ();
+                                release_msg->autorelease = _gf_true;
+                                release_msg->fin = 1;
+                                release_msg->ret = 0;
+                                release_msg->type = FUSE_AUTORELEASE;
 
-
-                        if (!msg->autorelease) {
-                                uv_cond_signal (&msg->cond);
+                                uv_mutex_init (&release_msg->mutex);
+                                uv_cond_init (&release_msg->cond);
                         }
                 }
-                uv_mutex_unlock (&priv->msg_mutex);
+                uv_mutex_unlock (&msg->mutex);
+
+                if (release_msg) {
+                        list_add (&release_msg->list, &priv->msg_list);
+
+                        notify = 1;
+                }
+
+                list_for_each_entry_safe (wait_msg, n, &priv->wait_list, list)
+                {
+
+                        inner_msg = ((winfsp_waitmsg_t*)wait_msg->args)->msg;
+
+                        /*
+                        gf_log(this->name, GF_LOG_DEBUG,
+                               "fuse try to clean message %p type: %d,
+                        unique: %lu",
+                                inner_msg, inner_msg->type,
+                        inner_msg->unique);
+                        */
+
+                        if (inner_msg->unique == msg->unique) {
+                                list_del_init (&wait_msg->list);
+#ifndef USE_IOBUF
+                                SH_FREE (wait_msg);
+#else
+                                iobuf_unref (wait_msg->iobuf);
+#endif /* USE_IOBUF */
+                                notify = 1;
+                                break;
+                        }
+                }
+
+                if (notify)
+                        uv_sem_post (&priv->msg_sem);
+
+                if (!msg->autorelease) {
+                        uv_cond_signal (&msg->cond);
+                }
         }
-        uv_mutex_unlock (&msg->mutex);
+        uv_mutex_unlock (&priv->msg_mutex);
 
         return 0;
 }
@@ -1494,8 +1494,8 @@ winfsp_get_req (xlator_t* this, int type, size_t size)
 
         INIT_FUSE_HEADER (msg->finh, msg->unique, type, ctx);
 
-#if 1 //def NEVER
-        //msg->finh->pid = 0;
+#if 1 // def NEVER
+        // msg->finh->pid = 0;
         msg->finh->uid = 0;
         msg->finh->gid = 0;
 #endif /* NEVER */

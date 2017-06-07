@@ -357,7 +357,7 @@ cache_do_rename (const char* from, const char* to)
         uv_mutex_lock (&cache.lock);
         g_hash_table_foreach_remove (cache.table, (GHRFunc)cache_del_children,
                                      (char*)from);
-        cache_invalidate (from, IP_RELOAD);
+        cache_invalidate (from, IP_DELETE);
         cache_invalidate (to, IP_RELOAD);
         uv_mutex_unlock (&cache.lock);
 }
@@ -426,9 +426,11 @@ cache_add_path (const char* path, const char* name)
         node = cache_get (path);
         if (node->dir) { /* only append the node was fetched by getdir() */
                 node->dir = g_list_prepend (node->dir, g_strdup (name));
+                /* Don't update time
                 node->dir_valid = time (NULL) + cache.dir_timeout_secs;
                 if (node->dir_valid > node->valid)
                         node->valid = node->dir_valid;
+                */
         }
         cache_clean ();
 }
@@ -446,9 +448,11 @@ cache_del_path (const char* path, const char* name)
                 g_free (filename_node->data);
                 node->dir = g_list_delete_link  (node->dir, filename_node);
         }
+#if 0 /* Don't update time */
         node->dir_valid = time (NULL) + cache.dir_timeout_secs;
         if (node->dir_valid > node->valid)
                 node->valid = node->dir_valid;
+#endif
         cache_clean ();
 }
 
