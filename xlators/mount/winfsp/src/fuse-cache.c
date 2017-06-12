@@ -51,7 +51,7 @@ static struct cache cache;
 struct node
 {
         struct fuse_stat stat;
-        GList *dir;
+        GTree *dir;
         time_t dir_valid;
         char* link;
         time_t link_valid;
@@ -64,8 +64,13 @@ struct fuse_cache_dirhandle
         const char* path;
         fuse_dirh_t h;
         fuse_dirfil_t filler;
-        GList* dir;
+        GTree* dir;
         uint64_t wrctr;
+};
+
+struct filler_args
+{
+
 };
 
 /* refresh list */
@@ -99,7 +104,7 @@ static void
 cache_node_changed (const char* path);
 
 static void
-cache_add_dir (const char* path, GList* dir);
+cache_add_dir (const char* path, GTree* dir);
 
 static void
 cache_add_path (const char* path, const char* name);
@@ -108,18 +113,10 @@ static void
 cache_del_path (const char* path, const char* name);
 
 static void
-free_dir (GList *dir)
+free_dir (GTree *dir)
 {
-        GList *t, *n;
-        if (dir) {
-                t = dir;
-                while (t != NULL) {
-                        n = t->next;
-                        g_free (t->data);
-                        dir = g_list_delete_link (dir, t);
-                        t = n;
-                }
-        }
+        if (dir)
+                g_tree_destroy (dir);
 }
 
 static void
@@ -396,7 +393,7 @@ cache_add_attr (const char* path, const struct fuse_stat* stbuf, uint64_t wrctr)
 }
 
 static void
-cache_add_dir (const char* path, GList* dir)
+cache_add_dir (const char* path, GTree* dir)
 {
         struct node* node;
 
@@ -411,13 +408,6 @@ cache_add_dir (const char* path, GList* dir)
         uv_mutex_unlock (&cache.lock);
 }
 
-static gint
-compare_filename (gconstpointer a,
-                  gconstpointer b)
-{
-        return strcmp (a, b);
-}
-
 static void
 cache_add_path (const char* path, const char* name)
 {
@@ -425,12 +415,15 @@ cache_add_path (const char* path, const char* name)
 
         node = cache_get (path);
         if (node->dir) { /* only append the node was fetched by getdir() */
-                node->dir = g_list_prepend (node->dir, g_strdup (name));
-                /* Don't update time
-                node->dir_valid = time (NULL) + cache.dir_timeout_secs;
-                if (node->dir_valid > node->valid)
-                        node->valid = node->dir_valid;
-                */
+                if (g_tree_lookup (node->dir, name) == NULL) {
+                        char *k = g_strdup (name);
+                        g_tree_insert (node->dir, k, k);
+                        /* Don't update time
+                        node->dir_valid = time (NULL) + cache.dir_timeout_secs;
+                        if (node->dir_valid > node->valid)
+                                node->valid = node->dir_valid;
+                        */
+                }
         }
         cache_clean ();
 }
@@ -438,16 +431,13 @@ cache_add_path (const char* path, const char* name)
 static void
 cache_del_path (const char* path, const char* name)
 {
-        GList * filename_node;
         struct node* node;
 
         node = cache_get (path);
 
-        filename_node = g_list_find_custom (node->dir, name, compare_filename);
-        if (filename_node) {
-                g_free (filename_node->data);
-                node->dir = g_list_delete_link  (node->dir, filename_node);
-        }
+        if (node->dir)
+                g_tree_remove (node->dir, name);
+
 #if 0 /* Don't update time */
         node->dir_valid = time (NULL) + cache.dir_timeout_secs;
         if (node->dir_valid > node->valid)
@@ -506,7 +496,7 @@ cache_get_attr (const char* path, struct fuse_stat* stbuf)
         node = cache_lookup (path);
         if (node != NULL) {
                 time_t now = time (NULL);
-                if (node->valid - now >= 0) {
+                if (node->valid - now > 0) {
                         if (!node->nullpath) {
                                 *stbuf = node->stat;
                                 err = 0;
@@ -585,13 +575,10 @@ cache_readlink (const char* path, char* buf, size_t size)
         return err;
 }
 
-static int fc;
-
 static int
 cache_dirfill (fuse_cache_dirh_t ch, const char* name,
                const struct fuse_stat* stbuf)
 {
-
 #if 0
                 gf_log ("fuse-cache", GF_LOG_INFO,
                         "vvvvv cache_dirfill(%d) (%s)", ++fc, name);
@@ -599,17 +586,34 @@ cache_dirfill (fuse_cache_dirh_t ch, const char* name,
 
         int err = ch->filler (ch->h, name, 0, 0);
         if (!err) {
-                ch->dir = g_list_prepend (ch->dir, g_strdup (name));
+                char *k = g_strdup (name);
+
+                if (ch->dir == NULL)
+                        ch->dir = g_tree_new_full (
+                                    (GCompareFunc)g_ascii_strcasecmp,
+                                    NULL, g_free, NULL);
+
+                g_tree_insert(ch->dir, k, k);
+
                 if (stbuf->st_mode & S_IFMT) {
+#if 0 /* do not save attr */
                         char* fullpath;
                         const char* basepath = !ch->path[1] ? "" : ch->path;
 
                         fullpath = g_strdup_printf ("%s/%s", basepath, name);
                         cache_add_attr (fullpath, stbuf, ch->wrctr);
                         g_free (fullpath);
+#endif /* NEVER */
                 }
         }
         return err;
+}
+
+static gboolean
+dir_filler_cb (gpointer key, gpointer value, gpointer data)
+{
+        struct fuse_cache_dirhandle *ch = (struct fuse_cache_dirhandle *)data;
+        return !!ch->filler (ch->h, (char*)value, 0, 0);
 }
 
 int
@@ -617,14 +621,18 @@ cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
 {
         struct fuse_cache_dirhandle ch;
         int err = 0;
-        GList* dir;
         struct node* node;
-        int dir_count = 0;
 
 #if 0
-                        gf_log ("fuse-cache", GF_LOG_INFO,
-                                "uuuuu cache_getdir() (%s)", path);
+        gf_log ("fuse-cache", GF_LOG_INFO,
+                "uuuuu cache_getdir() (%s)", path);
 #endif /* NEVER */
+
+        ch.path = path;
+        ch.h = h;
+        ch.filler = filler;
+        ch.dir = NULL;
+        ch.wrctr = cache_get_write_ctr ();
 
         uv_mutex_lock (&cache.lock);
         node = cache_lookup (path);
@@ -635,53 +643,22 @@ cache_getdir (const char* path, fuse_dirh_t h, fuse_dirfil_t filler)
                 else if (node->dir_valid - now < 0)
                         cache_node_changed (path);
 
-                const char* basepath = !path[1] ? "" : path;
-
-                dir = node->dir;
-                while (dir != NULL) {
-                        struct node* subnode;
-                        char* fullpath;
-                        fullpath = g_strdup_printf ("%s/%s", basepath,
-                                                    (char*)dir->data);
-#ifdef NEVER
-                        subnode = cache_lookup (fullpath);
-                        if (subnode && !subnode->nullpath) {
-                                //if (strcmp(basepath, ".") != 0 &&
-                                //    strcmp(basepath, "..") != 0) {
-                                //        dir_count++;
-                                        filler (h, (char*)dir->data, 0, 0);
-                                //}
-                        }
-#endif /* NEVER */
-
-                        filler (h, (char*)dir->data, 0, 0);
+                if (g_tree_nnodes (node->dir) <= 2)
+                        goto unlock;
 
 #if 0
                         gf_log ("fuse-cache", GF_LOG_INFO,
-                                "aaaaaa cache_getdir() (%s)", fullpath);
+                                "ffff cache_getdir() (%s,%d)", path, g_tree_nnodes (node->dir));
 #endif /* NEVER */
-                        g_free (fullpath);
 
-                        dir = dir->next;
-                }
+                g_tree_foreach (node->dir, dir_filler_cb, &ch);
 
-                //if (dir_count > 0) {
-                //        filler (h, ".", 0, 0);
-                //        filler (h, "..", 0, 0);
-                        uv_mutex_unlock (&cache.lock);
-                        return 0;
-                //}
+                uv_mutex_unlock (&cache.lock);
+                return 0;
         }
 unlock:
         uv_mutex_unlock (&cache.lock);
 
-        fc = 0;
-
-        ch.path = path;
-        ch.h = h;
-        ch.filler = filler;
-        ch.dir = NULL;
-        ch.wrctr = cache_get_write_ctr ();
         err = cache.next_oper->cache_getdir (path, &ch, cache_dirfill);
         if (!err)
                 cache_add_dir (path, ch.dir);
