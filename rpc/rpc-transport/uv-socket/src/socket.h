@@ -317,7 +317,7 @@ typedef enum {
 } flowctrl_state_t;
 
 typedef struct
-{
+{struct iobuf* xxxxxxxxxxxxxx;
 	pthread_t th_id;
         void* translator;
 	uv_loop_t* loop;
@@ -336,6 +336,7 @@ typedef struct
 	int rdcount;
 	int wrcount;
         ssize_t result;
+        int poll_op;
 
 	flowctrl_state_t fcstate;
 
@@ -344,10 +345,8 @@ typedef struct
         struct list_head event_q;
 	struct list_head action_q;
 
-	uv_mutex_t comm_lock;
-        uv_cond_t comm_cond;
-
-	uv_prepare_t prepare;
+	uv_mutex_t write_lock;
+        uv_cond_t read_cond;
 
         /* -1 = not connected. 0 = in progress. 1 = connected */
         char connected;
@@ -365,7 +364,6 @@ typedef struct
         };
         struct gf_sock_incoming incoming;
         int outgoing;
-        pthread_mutex_t lock;
         int port;
         int windowsize;
         char lowlat;

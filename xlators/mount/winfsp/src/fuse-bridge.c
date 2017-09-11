@@ -5306,6 +5306,7 @@ fuse_thread_proc (void* data)
                                 msg->type, msg->unique, args->path, args->size,
                                 args->offset);
                 } else if (msg->type == FUSE_WRITE_EX) {
+#if 0
                         winfsp_write_ex_t* args = (winfsp_write_ex_t*)msg->args;
                         gf_msg (this->name, GF_LOG_INFO, 0,
                                 LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
@@ -5313,6 +5314,7 @@ fuse_thread_proc (void* data)
                                 "handle=%lld, size: %lld, offset: %lld",
                                 msg->type, msg->unique, args->handle, args->size,
                                 args->offset);
+#endif /* NEVER */
                 } else if (msg->type != FUSE_GETATTR) {
                         winfsp_opendir_t* args = (winfsp_opendir_t*)msg->args;
                         gf_msg (this->name, GF_LOG_INFO, 0,

@@ -223,10 +223,7 @@ static int __socket_listen (rpc_transport_t* this);
 
 static void socket_close (rpc_transport_t* this);
 
-static int32_t __socket_submit_request (rpc_transport_t* this,
-                                        struct ioq* entry);
-
-static int32_t __socket_submit_reply (rpc_transport_t* this, struct ioq* entry);
+static int32_t __socket_submit_entry (rpc_transport_t* this, struct ioq* entry);
 
 static void
 __socket_do_action (uv_loop_t* loop, rpc_transport_t* this,
@@ -248,13 +245,13 @@ __socket_do_action (uv_loop_t* loop, rpc_transport_t* this,
                         break;
 
                 case AR_SOCKET_SUBMIT_REQUEST:
-                        __socket_submit_request (
+                        __socket_submit_entry (
                           (rpc_transport_t*)action->args[0],
                           (struct ioq*)action->args[1]);
                         break;
 
                 case AR_SOCKET_SUBMIT_REPLY:
-                        __socket_submit_reply (
+                        __socket_submit_entry (
                           (rpc_transport_t*)action->args[0],
                           (struct ioq*)action->args[1]);
                         break;
@@ -281,11 +278,11 @@ emit_socket_disconnect (rpc_transport_t* this)
         action_req->args[0] = this;
         action_req->num_of_args = 1;
 
-        uv_mutex_lock (&priv->comm_lock);
+        uv_mutex_lock (&priv->write_lock);
         {
                 list_add_tail (&action_req->list, &priv->action_q);
         }
-        uv_mutex_unlock (&priv->comm_lock);
+        uv_mutex_unlock (&priv->write_lock);
 
         ret = 0;
 
@@ -314,11 +311,11 @@ emit_socket_connect (rpc_transport_t* this, int port)
         action_req->args[1] = port;
         action_req->num_of_args = 2;
 
-        uv_mutex_lock (&priv->comm_lock);
+        uv_mutex_lock (&priv->write_lock);
         {
                 list_add_tail (&action_req->list, &priv->action_q);
         }
-        uv_mutex_unlock (&priv->comm_lock);
+        uv_mutex_unlock (&priv->write_lock);
 
         ret = 0;
 
@@ -346,11 +343,11 @@ emit_socket_listen (rpc_transport_t* this)
         action_req->args[0] = this;
         action_req->num_of_args = 1;
 
-        uv_mutex_lock (&priv->comm_lock);
+        uv_mutex_lock (&priv->write_lock);
         {
                 list_add_tail (&action_req->list, &priv->action_q);
         }
-        uv_mutex_unlock (&priv->comm_lock);
+        uv_mutex_unlock (&priv->write_lock);
 
         ret = 0;
 
@@ -677,7 +674,7 @@ __socket_readv_internal (socket_private_t* priv, struct iovec* opvector,
         int i = 0;
         int ret = -1;
 
-        uv_mutex_lock (&priv->comm_lock);
+        // uv_mutex_lock (&priv->comm_lock);
 
         while (!list_empty (&priv->read_q)) {
                 entry = list_first_entry (&priv->read_q, struct bufq, list);
@@ -718,7 +715,7 @@ __socket_readv_internal (socket_private_t* priv, struct iovec* opvector,
                 __asm__("int $3");
 #endif /* NEVER */
 
-        uv_mutex_unlock (&priv->comm_lock);
+        // uv_mutex_unlock (&priv->comm_lock);
 
         return totol;
 }
@@ -770,21 +767,7 @@ __socket_rwv (rpc_transport_t* this, struct iovec* vector, int count,
                          */
                         ret = -1;
                 } else if (write) {
-                        if (priv->use_ssl) {
-                                ret = ssl_write_one (this, opvector->iov_base,
-                                                     opvector->iov_len);
-                        } else {
-                                /*
-                                ret = __socket_write (priv, opvector,
-                                                      IOV_MIN (opcount));
-                                                      */
-                        }
-
-                        if (ret == 0 || (ret == -1 && errno == EAGAIN)) {
-                                /* done for now */
-                                break;
-                        }
-                        this->total_bytes_write += ret;
+                        /* nothing to do */
                 } else {
                         ret = __socket_cached_read (this, opvector, opcount);
 
@@ -940,7 +923,7 @@ __socket_reset (rpc_transport_t* this)
 
         memset (&priv->incoming, 0, sizeof (priv->incoming));
 
-        //event_unregister_close (this->ctx->event_pool, this);
+        // event_unregister_close (this->ctx->event_pool, this);
 
         priv->connected = -1;
 
@@ -1091,48 +1074,6 @@ out:
 }
 
 static int
-__socket_ioq_churn_entry (rpc_transport_t* this, struct ioq* entry)
-{
-        int ret = 0;
-        socket_private_t* priv = NULL;
-        uv_buf_t bufs[MAX_IOVEC];
-        int count = 0;
-        int i = 0;
-
-        priv = this->private;
-
-#if 0
-	for (int i = 0; i < entry->pending_count; i++) {
-		if (i == 2 && entry->pending_vector[i].iov_len != 131072)
-		gf_log (this->name, GF_LOG_INFO, "WRITE: tid=%p, %p, c=%d,i=%d, len=%d",
-			pthread_self (),  entry->pending_vector[i].iov_base, entry->pending_count, i,
-			entry->pending_vector[i].iov_len);
-	}
-#endif /* DEBUG */
-
-        for (; i < entry->pending_count; i++) {
-                if (entry->pending_vector[i].iov_len > 0) {
-                        bufs[count].base = entry->pending_vector[i].iov_base;
-                        bufs[count].len = entry->pending_vector[i].iov_len;
-                }
-                count++;
-        }
-
-        ret = uv_try_write (&priv->handle, bufs, count);
-        if (ret > 0) {
-                __socket_ioq_entry_free (entry);
-                this->total_bytes_write += ret;
-        } else {
-                gf_msg (this->name, GF_LOG_ERROR, 0,
-                        LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
-                        "write error: this=%p, rdstate=%d, %d(%s)", this,
-                        priv->rdstate, ret, uv_strerror (ret));
-        }
-
-        return ret;
-}
-
-static int
 __socket_ioq_append_entry (rpc_transport_t* this, struct ioq* entry)
 {
         int ret = 0;
@@ -1141,29 +1082,14 @@ __socket_ioq_append_entry (rpc_transport_t* this, struct ioq* entry)
 
         priv = this->private;
 
-#if 0
-	for (int i = 0; i < entry->pending_count; i++) {
-		gf_log (this->name, GF_LOG_ERROR, "yyyy"
-						  "tid=%p, %p, c=%d,i=%d, len=%d",
-			pthread_self (),  entry->pending_vector[i].iov_base, entry->pending_count, i,
-			entry->pending_vector[i].iov_len);
-	}
-#endif /* NEVER */
+        gf_log (this->name, GF_LOG_ERROR,
+                "aaaaaa append:%p,%d.", entry, entry ? entry->pending_count : 0);
 
         INIT_LIST_HEAD (&entry->list);
 
-#if 0
-	for (int i = 0; i < write_q->count; i++) {
-		gf_log (this->name, GF_LOG_ERROR, "wwwww"
-						  "tid=%p, %p, c=%d,i=%d, len=%d",
-			pthread_self (), write_q->bufs[i].base, write_q->count, i,
-			write_q->bufs[i].len);
-	}
-#endif /* NEVER */
-
-        uv_mutex_lock (&priv->comm_lock);
+        uv_mutex_lock (&priv->write_lock);
         list_add_tail (entry, &priv->write_q);
-        uv_mutex_unlock (&priv->comm_lock);
+        uv_mutex_unlock (&priv->write_lock);
 
         return ret;
 }
@@ -1184,9 +1110,9 @@ socket_event_poll_err (rpc_transport_t* this)
                 __socket_ioq_flush (this);
                 __socket_reset (this);
         }
-        //-- pthread_mutex_unlock (&priv->lock);
+//-- pthread_mutex_unlock (&priv->lock);
 
-        // rpc_transport_notify (this, RPC_TRANSPORT_DISCONNECT, this);
+// rpc_transport_notify (this, RPC_TRANSPORT_DISCONNECT, this);
 out:
         return ret;
 }
@@ -1902,8 +1828,12 @@ __socket_read_reply (rpc_transport_t* this)
                  */
                 frag->state = SP_STATE_NOTIFYING_XID;
 
+                uv_mutex_unlock (&priv->write_lock);
+
                 ret = rpc_transport_notify (this, RPC_TRANSPORT_MAP_XID_REQUEST,
                                             in->request_info);
+
+                uv_mutex_lock (&priv->write_lock);
 
                 /* Transition back to externally visible state. */
                 frag->state = SP_STATE_READ_MSGTYPE;
@@ -2253,10 +2183,12 @@ socket_proto_state_machine (rpc_transport_t* this,
         priv = this->private;
 
         //-- pthread_mutex_lock (&priv->lock);
+        uv_mutex_lock (&priv->write_lock);
         {
                 ret = __socket_proto_state_machine (this, pollin);
         }
         //-- pthread_mutex_unlock (&priv->lock);
+        uv_mutex_unlock (&priv->write_lock);
 
 out:
         return ret;
@@ -2271,17 +2203,12 @@ socket_event_poll_in (rpc_transport_t* this)
 
         ret = socket_proto_state_machine (this, &pollin);
         if (pollin) {
-                priv->ot_state = OT_CALLBACK;
                 ret = rpc_transport_notify (this, RPC_TRANSPORT_MSG_RECEIVED,
                                             pollin);
-
-                if (priv->ot_state == OT_CALLBACK) {
-                        priv->ot_state = OT_RUNNING;
-                }
                 rpc_transport_pollin_destroy (pollin);
         }
 
-        return ret;
+        return !pollin;
 }
 
 static int
@@ -2497,7 +2424,7 @@ socket_server_event_handler (rpc_transport_t* this)
                         this->ssl_name = cname;
                 }
 
-                //-- pthread_mutex_lock (&new_priv->lock);
+                pthread_mutex_lock (&new_priv->write_lock);
                 {
                         /*
                          * In the own_thread case, this is used to
@@ -2508,7 +2435,7 @@ socket_server_event_handler (rpc_transport_t* this)
                         new_priv->is_server = _gf_true;
                         rpc_transport_ref (new_trans);
                 }
-                pthread_mutex_unlock (&new_priv->lock);
+                uv_mutex_unlock (&new_priv->write_lock);
 
                 ret = event_register (ctx->event_pool, this,
                                       socket_register_handler);
@@ -2617,6 +2544,90 @@ writeq_get_size (struct ioq* write_q)
         return size;
 }
 
+static void*
+socket_poller (void* ctx)
+{
+        rpc_transport_t* this = ctx;
+        socket_private_t* priv = this->private;
+        size_t before = 0, after = 0;
+	int ret = -1;
+
+        GF_ASSERT (this);
+
+        /* Set THIS early on in the life of this thread, instead of setting it
+         * conditionally
+         */
+        THIS = this->xl;
+
+        while (1) {
+#if 1
+                priv->poll_op = 1;
+
+                uv_mutex_lock (&priv->write_lock);
+                before = bufq_get_size (&priv->read_q);
+                while (before == 0) {
+                        uv_cond_wait (&priv->read_cond, &priv->write_lock);
+                        before = bufq_get_size (&priv->read_q);
+                }
+                uv_mutex_unlock (&priv->write_lock);
+
+                after = before;
+
+                while (1) {
+#if 1
+                        uv_mutex_lock (&priv->write_lock);
+                        before = bufq_get_size (&priv->read_q);
+                        uv_mutex_unlock (&priv->write_lock);
+                        gf_msg (this->name, GF_LOG_ERROR, 0,
+                                LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+                                "POLL_IN: tid=%p, rdstate=%d, nread=%ld", pthread_self(),
+                                priv->rdstate, before);
+#endif /* NEVER */
+                        if (socket_event_poll_in (this)) {
+                                uv_mutex_lock (&priv->write_lock);
+                                before = bufq_get_size (&priv->read_q);
+                                uv_mutex_unlock (&priv->write_lock);
+                                gf_msg (this->name, GF_LOG_ERROR, 0,
+                                        LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+                                        "POLL_FAIL: tid=%p, rdstate=%d, nread=%ld", pthread_self(),
+                                        priv->rdstate, before);
+                                break;
+                        }
+                }
+
+                priv->poll_op = 0;
+#else
+                iobuf = iobuf_get2 (this->ctx->iobuf_pool, sizeof (struct req_buf));
+                req_buf = iobuf_ptr (iobuf);
+                req_buf->iobuf = iobuf;
+                req_buf->priv = priv;
+                req_buf->data = NULL;
+
+                uv_queue_work (stream->loop, &req_buf->work_req,
+                  socket_handle_cb, socket_after_handle_cb);
+#endif /* NEVER */
+
+        }
+
+        return NULL;
+}
+
+static int
+socket_spawn (rpc_transport_t* this)
+{
+        socket_private_t* priv = this->private;
+        int ret = -1;
+
+        ret = gf_thread_create(&priv->thread, NULL, socket_poller, this);
+        if (ret) {
+                gf_log (this->name, GF_LOG_ERROR,
+                        "could not create poll thread");
+                ret = -1;
+        }
+
+        return ret;
+}
+
 static void
 on_buf_alloc (uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf)
 {
@@ -2670,13 +2681,14 @@ socket_write_start (rpc_transport_t* this)
 
         priv = this->private;
 
-        uv_mutex_lock (&priv->comm_lock);
-        list_for_each_entry (write_q, &priv->write_q, list)
-        {
+        write_q = NULL;
+
+        uv_mutex_lock (&priv->write_lock);
+        if (!list_empty (&priv->write_q)) {
+                write_q = list_first_entry (&priv->write_q, struct ioq, list);
                 list_del_init (&write_q->list);
-                break;
         }
-        uv_mutex_unlock (&priv->comm_lock);
+        uv_mutex_unlock (&priv->write_lock);
 
         if (write_q == NULL) {
                 ret = -1;
@@ -2712,14 +2724,14 @@ socket_write_start (rpc_transport_t* this)
         priv->wrcount++;
 
         count = 0;
-        for (; i < write_q->pending_count; i++) {
+        for (i = 0; i < write_q->pending_count; i++) {
                 if (write_q->pending_vector[i].iov_len > 0) {
                         bufs[count].base = write_q->pending_vector[i].iov_base;
                         bufs[count].len = write_q->pending_vector[i].iov_len;
 
                         len += write_q->pending_vector[i].iov_len;
+                        count++;
                 }
-                count++;
         }
 
         ret = uv_write (&req_buf->write_req, &priv->handle, bufs, count,
@@ -2731,49 +2743,64 @@ socket_write_start (rpc_transport_t* this)
                 goto out;
         }
 
-        uv_mutex_lock (&priv->comm_lock);
         this->total_bytes_write += len;
-        uv_mutex_unlock (&priv->comm_lock);
 
         uv_timer_again (&priv->timer);
 
+        if (priv->xxxxxxxxxxxxxx)
+                __asm__ ("int $3");
+
+
+        priv->xxxxxxxxxxxxxx = write_q;
 out:
+
+        if (ret != -1)
+        gf_log (this->name, GF_LOG_ERROR,
+                "wwwwwwwwww writing socket:%p,%d,%d.", write_q, write_q ? write_q->count : 0, ret);
+
         return ret;
+}
+
+static int
+socket_write_start1 (rpc_transport_t* this)
+{
+        return socket_write_start(this);
 }
 
 static int
 socket_write_directly (rpc_transport_t* this)
 {
         socket_private_t* priv = NULL;
-        struct ioq *write_q = NULL, *n;
-        size_t size = 0, written = 0;
+        struct ioq* write_q = NULL;
+        int size = -1;
+        size_t written = 0;
         uv_buf_t bufs[MAX_IOVEC];
         int i = 0, count = 0;
 
         priv = this->private;
 
-        uv_mutex_lock (&priv->comm_lock);
+        for (;;) {
+                write_q = NULL;
 
-        list_for_each_entry_safe (write_q, n, &priv->write_q, list)
-        {
-#if 0
-	for (int i = 0; i < write_q->count; i++) {
-			gf_log (this->name, GF_LOG_ERROR, "WWWWWWWW"
-							  "tid=%p, %p, len=%d",
-				pthread_self (), write_q->bufs[i].base,
-				write_q->bufs[i].len);
-	}
-#endif /* NEVER */
+                uv_mutex_lock (&priv->write_lock);
+                if (!list_empty (&priv->write_q)) {
+                        write_q = list_first_entry (&priv->write_q, struct ioq, list);
+                        list_del_init (&write_q->list);
+                }
+                uv_mutex_unlock (&priv->write_lock);
+
+                if (write_q == NULL)
+                        break;
 
                 count = 0;
-                for (; i < write_q->pending_count; i++) {
+                for (i = 0; i < write_q->pending_count; i++) {
                         if (write_q->pending_vector[i].iov_len > 0) {
                                 bufs[count].base =
                                   write_q->pending_vector[i].iov_base;
                                 bufs[count].len =
                                   write_q->pending_vector[i].iov_len;
+                                count++;
                         }
-                        count++;
                 }
 
                 size = uv_try_write (&priv->handle, bufs, count);
@@ -2790,35 +2817,31 @@ socket_write_directly (rpc_transport_t* this)
                 for (int i = 0; i < count; i++)
                         written += bufs[i].len;
 
-                GF_ASSERT (written == size);
+                if (written != size) {
+                        gf_msg (this->name, GF_LOG_ERROR, 0,
+                                LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
+                                "write error: this=%p, rdstate=%d, (%ld,%ld)",
+                                this, priv->rdstate, written, size);
+                }
 #endif /* DEBUG */
 
                 __socket_ioq_entry_free (write_q);
                 this->total_bytes_write += size;
         }
 
-        uv_mutex_unlock (&priv->comm_lock);
-
-        return size;
+        return size > 0 ? 0 : size;
 }
 
 static int
 socket_write_simultaneous (rpc_transport_t* this)
 {
-        socket_private_t* priv = NULL;
-        int max = 3;
-        int empty = 0;
+        int max = 0;
 
-        priv = this->private;
+        do {
+                if (socket_write_start (this))
+                        break;
+        } while (max--);
 
-        while (max--) {
-                uv_mutex_lock (&priv->comm_lock);
-                empty = list_empty (&priv->write_q);
-                uv_mutex_unlock (&priv->comm_lock);
-                if (!empty) {
-                        socket_write_start (this);
-                }
-        }
         return 0;
 }
 
@@ -2830,7 +2853,7 @@ socket_get_action (rpc_transport_t* this)
 
         priv = this->private;
 
-        uv_mutex_lock (&priv->comm_lock);
+        uv_mutex_lock (&priv->write_lock);
         {
                 if (!list_empty (&priv->action_q)) {
                         action_req = list_first_entry (&priv->action_q,
@@ -2838,7 +2861,7 @@ socket_get_action (rpc_transport_t* this)
                         list_del_init (action_req);
                 }
         }
-        uv_mutex_unlock (&priv->comm_lock);
+        uv_mutex_unlock (&priv->write_lock);
 
         return action_req;
 }
@@ -2855,8 +2878,7 @@ socket_do_connect (rpc_transport_t* this)
 
         if (priv->connected == 1) {
                 return S_HANDSHAKE;
-        }
-        else
+        } else
                 return S_REQ_CONNECT;
 }
 
@@ -2884,21 +2906,19 @@ socket_do_handshake (rpc_transport_t* this)
                 priv->rdstate = C_STOP;
         }
 
+#ifdef NEVER
         if (priv->rdstate == C_BUSY) {
                 priv->rdstate = C_STOP;
                 uv_read_stop (&priv->handle);
         }
+#endif /* NEVER */
 
-        if (priv->wrstate == C_STOP && priv->rdstate == C_STOP) {
-                uv_mutex_lock (&priv->comm_lock);
-                write = !list_empty (&priv->write_q);
-                uv_mutex_unlock (&priv->comm_lock);
-
-                if (write) {
+        if (priv->wrstate == C_STOP) {
+                //if (!priv->poll_op)
                         socket_write_simultaneous (this);
-                } else
-                        socket_read_start (this);
-        } else if (priv->wrstate == C_DONE && priv->rdstate == C_STOP) {
+        }
+
+        if (priv->rdstate == C_STOP) {
                 socket_read_start (this);
         }
 
@@ -2913,7 +2933,7 @@ socket_do_kill (rpc_transport_t* this)
 
         priv = this->private;
 
-        uv_mutex_lock (&priv->comm_lock);
+        uv_mutex_lock (&priv->write_lock);
 
         list_for_each_entry_safe (write_q, n, &priv->write_q, list)
         {
@@ -2924,7 +2944,7 @@ socket_do_kill (rpc_transport_t* this)
                 //-- pthread_mutex_unlock (&priv->lock);
         }
 
-        uv_mutex_unlock (&priv->comm_lock);
+        uv_mutex_unlock (&priv->write_lock);
 
         socket_close (this);
 
@@ -3022,9 +3042,45 @@ socket_error_cb (rpc_transport_t* this, int status)
         */
 }
 
-static void
-socket_close_cb (uv_handle_t* handle);
+static void socket_close_cb (uv_handle_t* handle);
 
+
+static void
+socket_handle_cb(uv_work_t* req)
+{
+        struct req_buf* req_buf = NULL;
+        socket_private_t* priv = NULL;
+        size_t before, after;
+
+        req_buf = CONTAINER_OF (req, struct req_buf, req);
+        priv = req_buf->priv;
+
+        uv_mutex_lock (&priv->write_lock);
+
+        before = bufq_get_size (&priv->read_q);
+        while (before > 0) {
+                uv_mutex_unlock (&priv->write_lock);
+                uv_mutex_lock (&priv->write_lock);
+                socket_event_poll_in (priv->translator);
+                uv_mutex_unlock (&priv->write_lock);
+                uv_mutex_lock (&priv->write_lock);
+                after = bufq_get_size (&priv->read_q);
+                if (after < before)
+                        before = after;
+                else
+                        break;
+        }
+
+        uv_mutex_unlock (&priv->write_lock);
+}
+
+static void
+socket_after_handle_cb(uv_work_t* req)
+{
+        struct req_buf* req_buf = NULL;
+        req_buf = CONTAINER_OF (req, struct req_buf, req);\
+        iobuf_unref (req_buf->iobuf);
+}
 
 static void
 socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
@@ -3033,8 +3089,10 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
         socket_private_t* priv = NULL;
         struct bufq* bufq = NULL;
         struct list_head* node = NULL;
-        int before = 0, after = 0;
+        int before = 0;
         int handle_incoming = 0;
+        struct req_buf* req_buf = NULL;
+        struct iobuf* iobuf = NULL;
         int ret = -1;
 
         priv = CONTAINER_OF (stream, socket_private_t, handle);
@@ -3044,7 +3102,7 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 
         priv->rdcount = 0;
 
-#if 0
+#if 1
         gf_msg (this->name, GF_LOG_ERROR, 0,
                 LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                 "READ: tid=%p, rdstate=%d, nread=%ld", pthread_self(),
@@ -3068,13 +3126,14 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 
                         if (nread == UV_ECONNRESET) {
                                 priv->handle.data = priv;
-                                rpc_transport_notify (this, RPC_TRANSPORT_DISCONNECT, this);
-                                //uv_close (&priv->handle, socket_close_cb);
-                                //uv_timer_again (&priv->timer);
+                                rpc_transport_notify (
+                                  this, RPC_TRANSPORT_DISCONNECT, this);
+                                // uv_close (&priv->handle, socket_close_cb);
+                                // uv_timer_again (&priv->timer);
                         }
                 }
         } else if (nread <= buf->len) {
-                uv_mutex_lock (&priv->comm_lock);
+                uv_mutex_lock (&priv->write_lock);
                 {
 #if 0
                         size_t dd = bufq_get_size (&priv->read_q);
@@ -3099,8 +3158,10 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
                                 __asm__("int $3");
                         }
 #endif /* NEVER */
+
+                        uv_cond_broadcast (&priv->read_cond);
                 }
-                uv_mutex_unlock (&priv->comm_lock);
+                uv_mutex_unlock (&priv->write_lock);
 
                 handle_incoming = (nread < buf->len);
         }
@@ -3109,16 +3170,10 @@ socket_read_cb (uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
                 priv->rdstate = C_DONE;
                 uv_read_stop (&priv->handle);
 
-                before = bufq_get_size (&priv->read_q);
-                while (before > 0) {
-                        socket_event_poll_in (this);
-                        after = bufq_get_size (&priv->read_q);
-                        if (after < before)
-                                before = after;
-                        else
-                                break;
-                }
-
+                socket_do_next (this);
+        }
+        else {
+                //socket_write_directly (this);
                 socket_do_next (this);
         }
 }
@@ -3129,7 +3184,6 @@ socket_write_cb (uv_write_t* req, int status)
         rpc_transport_t* this = NULL;
         socket_private_t* priv = NULL;
         struct req_buf* req_buf = NULL;
-        struct req_buf* next_req_buf = NULL;
         struct ioq* write_q = NULL;
         struct ioq* ioq = NULL;
         ssize_t len = 0;
@@ -3165,31 +3219,33 @@ socket_write_cb (uv_write_t* req, int status)
                         //-- pthread_mutex_unlock (&priv->lock);
                 }
 
-                uv_mutex_lock (&priv->comm_lock);
-                write_empty = list_empty (&priv->write_q);
-                uv_mutex_unlock (&priv->comm_lock);
-
-                if (write_empty) {
-                        priv->wrstate = C_DONE;
-                        priv->fcstate &= ~FC_WRITE;
-                        socket_do_next (this);
-                } else {
-                        socket_write_start (this);
+                if (priv->xxxxxxxxxxxxxx != ioq) {
+                        gf_log (this->name, GF_LOG_ERROR,
+                        "WWWWWWWWWWWWWWWWW fffffff socket:%p,%d.", ioq, len);
                 }
+                else
+                        gf_log (this->name, GF_LOG_ERROR,
+                                "WWWWWWWWWWWWWWWWW writing socket:%p,%d.", ioq, len);
 
-                rpc_transport_notify (this, RPC_TRANSPORT_MSG_SENT,
-                      NULL);
+                priv->xxxxxxxxxxxxxx = 0;
+
+                priv->wrstate = C_DONE;
+                priv->fcstate &= ~FC_WRITE;
+
+                rpc_transport_notify (this, RPC_TRANSPORT_MSG_SENT, NULL);
+
+                socket_do_next (this);
         } else {
                 gf_log (this->name, GF_LOG_ERROR,
                         "failure on writing socket:%s.", uv_strerror (status));
 
                 /* restore the write data to queue */
-                uv_mutex_lock (&priv->comm_lock);
+                uv_mutex_lock (&priv->write_lock);
                 list_add (&ioq->list, &priv->write_q);
-                uv_mutex_unlock (&priv->comm_lock);
+                uv_mutex_unlock (&priv->write_lock);
 
                 if (status == UV_EAGAIN) {
-                        socket_write_start (this);
+                        socket_write_start1 (this);
                 } else {
                         if (__does_socket_rwv_error_need_logging (priv, 1)) {
                                 GF_LOG_OCCASIONALLY (
@@ -3390,7 +3446,7 @@ __socket_handle_init (uv_loop_t* loop, rpc_transport_t* this)
                 ign_enoent = dict_get_str_boolean (
                   this->options, "transport.socket.ignore-enoent", _gf_false);
 
-                uv_tcp_nodelay (&priv->handle, 0);
+                uv_tcp_nodelay (&priv->handle, 1);
 
                 uv_tcp_simultaneous_accepts (&priv->handle, 1);
 
@@ -3492,7 +3548,8 @@ __socket_init (uv_loop_t* loop, rpc_transport_t* this)
                 }
                 priv->timer_inited = _gf_true;
 
-                uv_timer_start (&priv->timer, socket_timer_cb, 3 * 1000, 3 * 1000);
+                uv_timer_start (&priv->timer, socket_timer_cb, 3 * 1000,
+                                3 * 1000);
         }
 
         if (!priv->action_handle_inited) {
@@ -3803,11 +3860,10 @@ out:
 }
 
 static int32_t
-__socket_submit_request (rpc_transport_t* this, struct ioq* entry)
+__socket_submit_entry (rpc_transport_t* this, struct ioq* entry)
 {
         socket_private_t* priv = NULL;
         int can_write = 0;
-        int need_append = 1;
         int ret = -1;
 
         GF_VALIDATE_OR_GOTO ("socket", this, out);
@@ -3817,71 +3873,15 @@ __socket_submit_request (rpc_transport_t* this, struct ioq* entry)
 
         //-- pthread_mutex_lock (&priv->lock);
         {
-                if (pthread_self () == priv->th_id) {
-                        uv_mutex_lock (&priv->comm_lock);
+                ret = __socket_ioq_append_entry (this, entry);
 
-                        if (list_empty (&priv->write_q)) {
-                                ret = __socket_ioq_churn_entry (this, entry);
-                                if (ret > 0)
-                                        need_append = 0;
-                        }
-
-                        uv_mutex_unlock (&priv->comm_lock);
-                }
-
-                if (need_append) {
-                        ret = __socket_ioq_append_entry (this, entry);
-                        uv_mutex_lock (&priv->comm_lock);
-                        priv->fcstate |= FC_WRITE;
-                        uv_mutex_unlock (&priv->comm_lock);
-
+                if (pthread_self () != priv->th_id) {
+                        //if (!priv->poll_op)
+                        //        need_append = socket_write_simultaneous (this);
                         uv_async_send (&priv->action);
                 }
         }
-//-- pthread_mutex_unlock (&priv->lock);
-
-out:
-        return ret;
-}
-
-static int32_t
-__socket_submit_reply (rpc_transport_t* this, struct ioq* entry)
-{
-        socket_private_t* priv = NULL;
-        int can_write = 0;
-        int need_append = 1;
-        int ret = 0;
-
-        GF_VALIDATE_OR_GOTO ("socket", this, out);
-        GF_VALIDATE_OR_GOTO ("socket", this->private, out);
-
-        priv = this->private;
-
-        //-- pthread_mutex_lock (&priv->lock);
-        {
-                if (pthread_self () == priv->th_id) {
-                        uv_mutex_lock (&priv->comm_lock);
-
-                        if (list_empty (&priv->write_q)) {
-                                ret = __socket_ioq_churn_entry (this, entry);
-                                if (ret > 0)
-                                        need_append = 0;
-                        }
-
-                        uv_mutex_unlock (&priv->comm_lock);
-                }
-
-                if (need_append) {
-                        ret = __socket_ioq_append_entry (this, entry);
-                        uv_mutex_lock (&priv->comm_lock);
-                        priv->fcstate |= FC_WRITE;
-                        uv_mutex_unlock (&priv->comm_lock);
-
-                        uv_async_send (&priv->action);
-                }
-        }
-unlock:
-//-- pthread_mutex_unlock (&priv->lock);
+        //-- pthread_mutex_unlock (&priv->lock);
 
 out:
         return ret;
@@ -3944,7 +3944,7 @@ socket_submit_request (rpc_transport_t* this, rpc_transport_req_t* req)
 
         entry = __socket_ioq_new (this, &req->msg);
         if (entry)
-                ret = __socket_submit_request (this, entry);
+                ret = __socket_submit_entry (this, entry);
 
 out:
         return ret;
@@ -3961,7 +3961,7 @@ socket_submit_reply (rpc_transport_t* this, rpc_transport_reply_t* reply)
 
         entry = __socket_ioq_new (this, &reply->msg);
         if (entry)
-                ret = __socket_submit_reply (this, entry);
+                ret = __socket_submit_entry (this, entry);
 
 out:
         return ret;
@@ -4065,7 +4065,7 @@ socket_throttle (rpc_transport_t* this, gf_boolean_t onoff)
                  * on a disconnected transport, which breaks epoll's event to
                  * registered fd mapping. */
 
-                uv_mutex_lock (&priv->comm_lock);
+                uv_mutex_lock (&priv->write_lock);
 
                 if (priv->connected == 1) {
                         if (!onoff)
@@ -4074,7 +4074,7 @@ socket_throttle (rpc_transport_t* this, gf_boolean_t onoff)
                                 priv->fcstate &= ~FC_READ;
                 }
 
-                uv_mutex_unlock (&priv->comm_lock);
+                uv_mutex_unlock (&priv->write_lock);
         }
         //-- pthread_mutex_unlock (&priv->lock);
         return 0;
@@ -4258,7 +4258,6 @@ socket_init (rpc_transport_t* this)
         char* dh_param = DEFAULT_DH_PARAM;
         char* ec_curve = DEFAULT_EC_CURVE;
         char* crl_path = NULL;
-        pthread_mutexattr_t attr;
 
         if (this->private) {
                 gf_log_callingfn (this->name, GF_LOG_ERROR,
@@ -4278,12 +4277,9 @@ socket_init (rpc_transport_t* this)
                 return -1;
         }
 
-        uv_mutex_init (&priv->comm_lock);
-        uv_cond_init (&priv->comm_cond);
+        uv_mutex_init (&priv->write_lock);
+        uv_cond_init (&priv->read_cond);
 
-        pthread_mutexattr_init (&attr);
-        pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_RECURSIVE);
-        pthread_mutex_init (&priv->lock, &attr);
         priv->translator = this;
         priv->handle_inited = _gf_false;
         priv->timer_inited = _gf_false;
@@ -4682,6 +4678,8 @@ socket_init (rpc_transport_t* this)
 out:
         this->private = priv;
 
+        socket_spawn (this);
+
         return 0;
 
 err:
@@ -4708,20 +4706,21 @@ fini (rpc_transport_t* this)
 
         priv = this->private;
         if (priv) {
-                pthread_mutex_lock (&priv->lock);
+                uv_mutex_lock (&priv->write_lock);
                 {
                         __socket_ioq_flush (this);
                         __socket_reset (this);
 
-                        uv_cond_destroy (&priv->comm_cond);
-                        uv_mutex_destroy (&priv->comm_lock);
+                        uv_cond_destroy (&priv->read_cond);
                 }
-                pthread_mutex_unlock (&priv->lock);
+                uv_mutex_unlock (&priv->write_lock);
+
+                uv_mutex_destroy (&priv->write_lock);
+                uv_mutex_destroy (&priv->write_lock);
 
                 gf_log (this->name, GF_LOG_TRACE, "transport %p destroyed",
                         this);
 
-                pthread_mutex_destroy (&priv->lock);
                 if (priv->ssl_private_key) {
                         GF_FREE (priv->ssl_private_key);
                 }

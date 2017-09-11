@@ -1114,7 +1114,8 @@ case $host_os in
 		BUILD_FUSE_CLIENT=yes
         FUSE_CLIENT_SUBDIR="winfsp"
         GLUSTERD_WORKDIR="${LOCALSTATEDIR}/lib/glusterd"
-        GF_CFLAGS="${GF_CFLAGS} -I/usr/include/tirpc -I/usr/include/libxml2/libxml"
+        GF_CFLAGS="${GF_CFLAGS}"
+		GF_CPPFLAGS="${GF_CPPFLAGS} -I/usr/include/libxml2/libxml -I/usr/include/tirpc -I/opt/include/libuv/include"
         GF_LDFLAGS="${GF_LDFLAGS} -lsmartheap-0.1 -no-undefined"
         enable_shared=yes; enable_static=no
         ;;

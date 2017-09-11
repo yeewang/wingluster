@@ -407,8 +407,8 @@ winfsp_open (const char* path, struct fuse_file_info* fi)
 }
 
 static int
-winfsp_read (const char* path, char* buf, size_t size, off_t offset,
-             struct fuse_file_info* fi)
+winfsp_read_base (const char* path, char* buf, size_t size, off_t offset,
+                  struct fuse_file_info* fi)
 {
         winfsp_msg_t* msg = NULL;
         winfsp_read_t* params = NULL;
@@ -427,18 +427,12 @@ winfsp_read (const char* path, char* buf, size_t size, off_t offset,
 
         winfsp_send_req (msg);
 
-        ret = winfsp_get_result (msg);
-
-        winfsp_cleanup_req (msg);
-
-        return ret;
-
-        // return winfsp_get_result_and_cleanup (msg);
+        return winfsp_get_result_and_cleanup (msg);
 }
 
 static int
-winfsp_read_base (const char* path, char* buf, size_t size, off_t offset,
-                  struct fuse_file_info* fi)
+winfsp_read_cached (const char* path, char* buf, size_t size, off_t offset,
+                    struct fuse_file_info* fi)
 {
         xlator_t* this = get_fuse_xlator ();
         fuse_private_t* priv = NULL;
@@ -482,6 +476,9 @@ winfsp_read_base (const char* path, char* buf, size_t size, off_t offset,
                                 size);
                         ret = size;
                 } else {
+                        if (priv->read_cache.iobuf)
+                                iobuf_unref (priv->read_cache.iobuf);
+
                         priv->read_cache.iobuf =
                           iobuf_get2 (this->ctx->iobuf_pool, MAX_READ_PAGE);
                         if (priv->read_cache.iobuf == NULL) {
@@ -518,6 +515,35 @@ unlock:
 }
 
 static int
+winfsp_read (const char* path, char* buf, size_t size, off_t offset,
+             struct fuse_file_info* fi)
+{
+        int ret = -1;
+        size_t seg_size = 0, off = 0, last = 0;
+
+        if (size < MAX_READ_PAGE) {
+                ret = winfsp_read_cached (path, buf, size, offset, fi);
+        } else {
+                last = size;
+                while (last > 0) {
+                        seg_size = last > MAX_READ_PAGE ?
+                                     MAX_READ_PAGE : last;
+                        ret = winfsp_read_base (path, buf + off, seg_size,
+                                                offset + off, fi);
+                        if (ret < 0)
+                                break;
+
+                        off += seg_size;
+                        last -= seg_size;
+                }
+                if (ret > 0)
+                        ret = size;
+        }
+
+        return ret;
+}
+
+static int
 winfsp_write_base (const char* path, const char* buf, size_t size, off_t offset,
                    struct fuse_file_info* fi)
 {
@@ -540,7 +566,7 @@ winfsp_write_base (const char* path, const char* buf, size_t size, off_t offset,
         winfsp_send_req (msg);
         ret = winfsp_get_result_and_cleanup (msg);
 
-        return size;
+        return ret;
 }
 
 static int
@@ -659,11 +685,25 @@ winfsp_write (const char* path, const char* buf, size_t size, off_t offset,
               struct fuse_file_info* fi)
 {
         int ret = -1;
+        size_t seg_size = 0, off = 0, last = 0;
 
         if (size < MAX_WRITE_PAGE) {
                 ret = winfsp_write_cached (path, buf, size, offset, fi);
         } else {
-                ret = winfsp_write_base (path, buf, size, offset, fi);
+                last = size;
+                while (last > 0) {
+                        seg_size = last > MAX_WRITE_PAGE ?
+                                     MAX_WRITE_PAGE : last;
+                        ret = winfsp_write_base (path, buf + off, seg_size,
+                                                 offset + off, fi);
+                        if (ret < 0)
+                                break;
+
+                        off += seg_size;
+                        last -= seg_size;
+                }
+                if (ret > 0)
+                        ret = size;
         }
 
         return ret;
