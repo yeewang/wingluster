@@ -91,6 +91,15 @@ typedef long long mount_flag_t;
 #define _PATH_MOUNT "/sbin/mount"
 #endif
 
+#ifdef GF_CYGWIN_HOST_OS
+#include <sys/param.h>
+#include <sys/mount.h>
+#define _PATH_MOUNT "/bin/mount"
+#define umount2(dir, flags) cygwin_umount (dir, ((flags) != 0) ? 0x00000001 : 0)
+#define MS_RDONLY 1
+#endif
+
+
 #ifdef FUSE_UTIL
 #define MALLOC(size) malloc (size)
 #define FREE(ptr) free (ptr)

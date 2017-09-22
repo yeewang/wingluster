@@ -34,7 +34,9 @@
 
 #ifdef HAVE_MALLOC_STATS
 #ifdef DEBUG
+#ifndef GF_CYGWIN_HOST_OS
 #include <mcheck.h>
+#endif /* GF_CYGWIN_HOST_OS */
 #endif
 #endif
 

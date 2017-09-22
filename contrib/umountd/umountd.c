@@ -148,7 +148,11 @@ umountd_async (char *path, dev_t dev, int frmdir, int timeout)
         int                       unmount_ret = 0;
 
         do {
+#ifndef GF_CYGWIN_HOST_OS
                 unmount_ret = unmount (path, 0);
+#else
+                unmount_ret = umount (path);
+#endif /* GF_CYGWIN_HOST_OS */
                 if (unmount_ret == 0)
                         gf_log ("umountd", GF_LOG_INFO, "Unmounted %s", path);
 

@@ -159,6 +159,9 @@ __dentry_grep (inode_table_t *table, inode_t *parent, const char *name);
 inode_t *
 inode_grep (inode_table_t *table, inode_t *parent, const char *name);
 
+dentry_t  *
+inode_grep_dentry (inode_table_t *table, inode_t *parent, const char *name);
+
 int
 inode_grep_for_gfid (inode_table_t *table, inode_t *parent, const char *name,
                      uuid_t gfid, ia_type_t *type);
@@ -176,7 +179,13 @@ inode_t *
 inode_from_path (inode_table_t *table, const char *path);
 
 inode_t *
+inode_from_path_2 (inode_table_t *itable, const char *path, int *count);
+
+inode_t *
 inode_resolve (inode_table_t *table, char *path);
+
+char *
+inode_resolve_path (inode_table_t * table, const char * cpath);
 
 /* deal with inode ctx's both values */
 

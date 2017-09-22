@@ -255,7 +255,11 @@ static int check_is_mount_child(void *p)
 	struct mntent *entp;
 	int count;
 
+#ifndef GF_CYGWIN_HOST_OS
 	res = mount("", "/", "", MS_PRIVATE | MS_REC, NULL);
+#else
+	res = mount("", "/", "");
+#endif
 	if (res == -1) {
 		fprintf(stderr, "%s: failed to mark mounts private: %s\n",
 			progname, strerror(errno));
@@ -281,7 +285,11 @@ static int check_is_mount_child(void *p)
 		return 1;
 	}
 
+#ifndef GF_CYGWIN_HOST_OS
 	res = mount(".", "/", "", MS_BIND | MS_REC, NULL);
+#else
+	res = mount(".", "/", "");
+#endif
 	if (res == -1) {
 		fprintf(stderr, "%s: failed to bind parent to /: %s\n",
 			progname, strerror(errno));
@@ -324,12 +332,17 @@ static pid_t clone_newns(void *a)
 	return __clone2(check_is_mount_child, stack, sizeof(buf) / 2,
 			CLONE_NEWNS, a, NULL, NULL, NULL);
 #else
+#ifndef GF_CYGWIN_HOST_OS
 	return clone(check_is_mount_child, stack, CLONE_NEWNS, a);
+#else
+	return getpid();
+#endif
 #endif
 }
 
 static int check_is_mount(const char *last, const char *mnt)
 {
+#ifndef GF_CYGWIN_HOST_OS
 	pid_t pid, p;
 	int status;
 	const char *a[2] = { last, mnt };
@@ -353,6 +366,7 @@ static int check_is_mount(const char *last, const char *mnt)
 	}
 	if (WEXITSTATUS(status) != 0)
 		return -1;
+#endif
 
 	return 0;
 }
@@ -570,6 +584,7 @@ struct mount_flags {
 static struct mount_flags mount_flags[] = {
 	{"rw",	    MS_RDONLY,	    0, 1},
 	{"ro",	    MS_RDONLY,	    1, 1},
+#ifndef GF_CYGWIN_HOST_OS
 	{"suid",    MS_NOSUID,	    0, 0},
 	{"nosuid",  MS_NOSUID,	    1, 1},
 	{"dev",	    MS_NODEV,	    0, 0},
@@ -580,6 +595,7 @@ static struct mount_flags mount_flags[] = {
 	{"sync",    MS_SYNCHRONOUS, 1, 1},
 	{"atime",   MS_NOATIME,	    0, 1},
 	{"noatime", MS_NOATIME,	    1, 1},
+#endif
 	{"dirsync", MS_DIRSYNC,	    1, 1},
 	{NULL,	    0,		    0, 0}
 };
@@ -696,7 +712,11 @@ static int do_mount(const char *mnt, char **typep, mode_t rootmode,
 		    char **mnt_optsp, off_t rootsize)
 {
 	int res;
+#ifndef GF_CYGWIN_HOST_OS
 	int flags = MS_NOSUID | MS_NODEV;
+#else
+	int flags = 0;
+#endif
 	char *optbuf;
 	char *mnt_opts = NULL;
 	const char *s;
@@ -812,8 +832,11 @@ static int do_mount(const char *mnt, char **typep, mode_t rootmode,
 		strcpy(source, fsname);
 	else
 		strcpy(source, subtype ? subtype : dev);
-
+#ifndef GF_CYGWIN_HOST_OS
 	res = mount(source, mnt, type, flags, optbuf);
+#else
+	res = mount(source, mnt, type);
+#endif
 	if (res == -1 && errno == ENODEV && subtype) {
 		/* Probably missing subtype support */
 		strcpy(type, blkdev ? "fuseblk" : "fuse");
@@ -824,13 +847,21 @@ static int do_mount(const char *mnt, char **typep, mode_t rootmode,
 			strcpy(source, type);
 		}
 
+#ifndef GF_CYGWIN_HOST_OS
 		res = mount(source, mnt, type, flags, optbuf);
+#else
+		res = mount(source, mnt, type);
+#endif
 	}
 	if (res == -1 && errno == EINVAL) {
 		/* It could be an old version not supporting group_id */
 		sprintf(d, "fd=%i,rootmode=%o,user_id=%i",
 			fd, rootmode, getuid());
+#ifndef GF_CYGWIN_HOST_OS
 		res = mount(source, mnt, type, flags, optbuf);
+#else
+		res = mount(source, mnt, type);
+#endif
 	}
 	if (res == -1) {
 		int errno_save = errno;

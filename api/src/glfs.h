@@ -62,6 +62,26 @@ typedef int acl_type_t;
 #ifndef GF_DARWIN_HOST_OS
 #define GFAPI_PUBLIC(sym, ver) /**/
 #define GFAPI_PRIVATE(sym, ver) /**/
+#ifdef GF_CYGWIN_HOST_OS
+#define pub_glfs_new                    glfs_new
+#define pub_glfs_set_volfile_server     glfs_set_volfile_server
+#define pub_glfs_set_logging            glfs_set_logging
+#define pub_glfs_init                   glfs_init
+
+#define pub_glfs_fini                   glfs_fini
+#define pub_glfs_chdir                  glfs_chdir
+
+#define pub_glfs_fgetxattr              glfs_fgetxattr
+#define pub_glfs_flistxattr             glfs_flistxattr
+#define pub_glfs_close                  glfs_close
+#define pub_glfs_telldir                glfs_telldir
+#define pub_glfs_readdirplus_r          glfs_readdirplus_r
+#define pub_glfs_readdir_r              glfs_readdir_r
+#define pub_glfs_seekdir                glfs_seekdir
+#define pub_glfs_pread                  glfs_pread
+#define pub_glfs_closedir               glfs_closedir
+#define pub_glfs_fstat                  glfs_fstat
+#endif /* GF_CYGWIN_HOST_OS */
 #else
 #define GFAPI_PUBLIC(sym, ver) __asm("_" __STRING(sym) "$GFAPI_" __STRING(ver))
 #define GFAPI_PRIVATE(sym, ver) __asm("_" __STRING(sym) "$GFAPI_PRIVATE_" __STRING(ver))

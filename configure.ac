@@ -19,18 +19,18 @@ AM_INIT_AUTOMAKE(tar-pax)
 #but libglusterfs fails to build with contrib (Then are not set up that way?)
 #AM_INIT_AUTOMAKE([subdir-objects])
 
-m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES(yes)])
+m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES(no)])
 
 if make --help 2>&1 | grep -q no-print-directory; then
-   AM_MAKEFLAGS="$AM_MAKEFLAGS --no-print-directory";
+   AM_MAKEFLAGS="$AM_MAKEFLAGS";
 fi
 
 if make --help 2>&1 | grep -q quiet; then
-   AM_MAKEFLAGS="$AM_MAKEFLAGS --quiet"
+   AM_MAKEFLAGS="$AM_MAKEFLAGS"
 fi
 
 if libtool --help 2>&1 | grep -q quiet; then
-   AM_LIBTOOLFLAGS="--quiet";
+   AM_LIBTOOLFLAGS="";
 fi
 
 AC_CONFIG_HEADERS([config.h site.h])
@@ -54,6 +54,8 @@ AC_CONFIG_FILES([Makefile
                 rpc/rpc-transport/Makefile
                 rpc/rpc-transport/socket/Makefile
                 rpc/rpc-transport/socket/src/Makefile
+                rpc/rpc-transport/uv-socket/Makefile
+                rpc/rpc-transport/uv-socket/src/Makefile
                 rpc/rpc-transport/rdma/Makefile
                 rpc/rpc-transport/rdma/src/Makefile
                 rpc/xdr/Makefile
@@ -68,6 +70,16 @@ AC_CONFIG_FILES([Makefile
                 xlators/mount/fuse/utils/mount.glusterfs
                 xlators/mount/fuse/utils/mount_glusterfs
                 xlators/mount/fuse/utils/Makefile
+                xlators/mount/dokan/Makefile
+                xlators/mount/dokan/src/Makefile
+                xlators/mount/dokan/utils/mount.glusterfs
+                xlators/mount/dokan/utils/mount_glusterfs
+                xlators/mount/dokan/utils/Makefile
+                xlators/mount/winfsp/Makefile
+                xlators/mount/winfsp/src/Makefile
+                xlators/mount/winfsp/utils/mount.glusterfs
+                xlators/mount/winfsp/utils/mount_glusterfs
+                xlators/mount/winfsp/utils/Makefile
                 xlators/storage/Makefile
                 xlators/storage/posix/Makefile
                 xlators/storage/posix/src/Makefile
@@ -472,6 +484,13 @@ case $host_os in
         USE_POSIX_ACLS='0'
         BUILD_POSIX_ACLS='no'
         ;;
+     cygwin*)
+		AC_MSG_WARN([cygwin/mingw does not friendly support POSIX ACLs... fix them])
+        #ACL_LIBS=''
+		ACL_LIBS='-lacl'
+        USE_POSIX_ACLS='1'
+        BUILD_POSIX_ACLS='yes'
+        ;;
      *)
         AC_CHECK_HEADERS([sys/acl.h], ,
                          AC_MSG_ERROR([Support for POSIX ACLs is required]))
@@ -489,6 +508,9 @@ case $host_os in
                 ;;
              darwin*)
                 ACL_LIBS='-lc'
+                ;;
+             cygwin*)
+                ACL_LIBS='-lacl'
                 ;;
         esac
         if test "x${ACL_LIBS}" = "x-lacl"; then
@@ -1202,11 +1224,25 @@ case $host_os in
         FUSERMOUNT_SUBDIR=""
         GLUSTERD_WORKDIR="${LOCALSTATEDIR}/db/glusterd"
         ;;
+      cygwin*)
+        GF_HOST_OS="GF_CYGWIN_HOST_OS"
+        GF_FUSE_CFLAGS="-DFUSERMOUNT_DIR=\\\"\$(bindir)\\\""
+        BUILD_FUSE_CLIENT=yes
+        FUSE_CLIENT_SUBDIR="winfsp"
+        GLUSTERD_WORKDIR="${LOCALSTATEDIR}/lib/glusterd"
+        GF_CFLAGS="${GF_CFLAGS}"
+        GF_CPPFLAGS="${GF_CPPFLAGS} -I/usr/include/libxml2 -I/usr/include/tirpc -I/opt/include/libuv/include"
+        GF_LDFLAGS="${GF_LDFLAGS} -L/usr/lib -lsmartheap-0.1 -no-undefined"
+        enable_shared=yes; enable_static=no
+        ;;
 esac
 
 case $host_os in
      darwin*)
         GFAPI_EXTRA_LDFLAGS='-Wl,-alias_list,$(top_srcdir)/api/src/gfapi.aliases'
+        ;;
+     cygwin*)
+        GFAPI_EXTRA_LDFLAGS='-Wl,--version-script=$(top_srcdir)/api/src/gfapi.map -no-undefined'
         ;;
      *)
         GFAPI_EXTRA_LDFLAGS='-Wl,--version-script=$(top_srcdir)/api/src/gfapi.map'
@@ -1488,7 +1524,14 @@ AC_SUBST(USE_EC_DYNAMIC_NEON)
 dnl libglusterfs.so uses math functions
 GF_LDADD="${GF_LDADD} ${MATH_LIB}"
 
-GF_XLATOR_DEFAULT_LDFLAGS='-avoid-version -export-symbols $(top_srcdir)/xlators/xlator.sym'
+case $host_os in
+     cygwin*)
+        GF_XLATOR_DEFAULT_LDFLAGS='-avoid-version -no-undefined'
+        ;;
+     *)
+        GF_XLATOR_DEFAULT_LDFLAGS='-avoid-version -export-symbols $(top_srcdir)/xlators/xlator.sym'
+        ;;
+esac
 
 AC_SUBST(GF_HOST_OS)
 AC_SUBST(GF_CFLAGS)
@@ -1513,6 +1556,7 @@ AC_SUBST([GF_CPPFLAGS])
 AM_CONDITIONAL([GF_LINUX_HOST_OS], test "${GF_HOST_OS}" = "GF_LINUX_HOST_OS")
 AM_CONDITIONAL([GF_DARWIN_HOST_OS], test "${GF_HOST_OS}" = "GF_DARWIN_HOST_OS")
 AM_CONDITIONAL([GF_BSD_HOST_OS], test "${GF_HOST_OS}" = "GF_BSD_HOST_OS")
+AM_CONDITIONAL([GF_CYGWIN_HOST_OS], test "${GF_HOST_OS}" = "GF_CYGWIN_HOST_OS")
 
 AC_SUBST(GLUSTERD_WORKDIR)
 AM_CONDITIONAL([GF_INSTALL_GLUSTERD_WORKDIR], test ! -d ${GLUSTERD_WORKDIR} && test -d ${sysconfdir}/glusterd )

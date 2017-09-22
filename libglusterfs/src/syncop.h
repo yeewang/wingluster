@@ -8,6 +8,10 @@
   cases as published by the Free Software Foundation.
 */
 
+//#if 0// def GF_CYGWIN_HOST_OS
+//#include "syncop-win32.h"
+//#else
+
 #ifndef _SYNCOP_H
 #define _SYNCOP_H
 

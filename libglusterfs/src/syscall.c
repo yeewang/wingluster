@@ -320,14 +320,26 @@ sys_write (int fd, const void *buf, size_t count)
 ssize_t
 sys_preadv (int fd, const struct iovec *iov, int iovcnt, off_t offset)
 {
+#ifdef GF_CYGWIN_HOST_OS
+        if (lseek (fd, offset, SEEK_SET) == -1)
+                return -1;
+        return readv (fd, iov, iovcnt);
+#else
         return preadv (fd, iov, iovcnt, offset);
+#endif
 }
 
 
 ssize_t
 sys_pwritev (int fd, const struct iovec *iov, int iovcnt, off_t offset)
 {
+#ifdef GF_CYGWIN_HOST_OS
+        if (lseek (fd, offset, SEEK_SET) == -1)
+                return -1;
+        return writev (fd, iov, iovcnt);
+#else
         return pwritev (fd, iov, iovcnt, offset);
+#endif
 }
 
 

@@ -291,8 +291,13 @@ out:
 
 
 int
+#ifdef GF_CYGWIN_HOST_OS
+glfs_set_xlator_option (struct glfs *fs, const char *xlator,
+                        const char *key, const char *value)
+#else
 pub_glfs_set_xlator_option (struct glfs *fs, const char *xlator,
                             const char *key, const char *value)
+#endif /* GF_CYGWIN_HOST_OS */
 {
 	xlator_cmdline_option_t *option = NULL;
 
@@ -1372,7 +1377,11 @@ GFAPI_SYMVER_PRIVATE_DEFAULT(glfs_ipc, 3.12.0);
 
 
 void
+#ifdef GF_CYGWIN_HOST_OS
+glfs_free (void *ptr)
+#else
 pub_glfs_free (void *ptr)
+#endif /* GF_CYGWIN_HOST_OS */
 {
         int mem_type = 0;
 
@@ -1496,7 +1505,11 @@ static struct glfs_sysrq_help {
 };
 
 int
+#ifdef GF_CYGWIN_HOST_OS
+glfs_sysrq (struct glfs *fs, char sysrq)
+#else
 pub_glfs_sysrq (struct glfs *fs, char sysrq)
+#endif /* GF_CYGWIN_HOST_OS */
 {
         glusterfs_ctx_t  *ctx = NULL;
         int               ret = 0;

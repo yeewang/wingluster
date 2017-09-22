@@ -4,6 +4,9 @@ glusterfsd_SOURCES = glusterfsd.c glusterfsd-mgmt.c
 glusterfsd_LDADD = $(top_builddir)/libglusterfs/src/libglusterfs.la \
 	$(top_builddir)/rpc/rpc-lib/src/libgfrpc.la \
 	$(top_builddir)/rpc/xdr/src/libgfxdr.la ${GF_LDADD}
+if GF_CYGWIN_HOST_OS
+glusterfsd_LDADD += -L$(top_builddir)/contrib/argp-standalone -largp
+endif
 glusterfsd_LDFLAGS = $(GF_LDFLAGS)
 
 gf_attach_SOURCES = gf_attach.c
@@ -35,6 +38,16 @@ uninstall-local:
 	rm -f $(DESTDIR)$(sbindir)/glusterfs
 	rm -f $(DESTDIR)$(sbindir)/glusterd
 
+	
+if GF_CYGWIN_HOST_OS
+install-data-local:
+	$(INSTALL) -d -m 755 $(DESTDIR)$(localstatedir)/run
+	$(INSTALL) -d -m 755 $(DESTDIR)$(localstatedir)/run/gluster
+	$(INSTALL) -d -m 755 $(DESTDIR)$(localstatedir)/log/glusterfs
+	$(INSTALL) -d -m 755 $(DESTDIR)$(sbindir)
+	cp $(DESTDIR)$(sbindir)/glusterfsd $(DESTDIR)$(sbindir)/glusterfs
+	cp $(DESTDIR)$(sbindir)/glusterfsd $(DESTDIR)$(sbindir)/glusterd
+else
 install-data-local:
 	$(INSTALL) -d -m 755 $(DESTDIR)$(localstatedir)/run
 	$(INSTALL) -d -m 755 $(DESTDIR)$(localstatedir)/run/gluster
@@ -44,3 +57,4 @@ install-data-local:
 	rm -f $(DESTDIR)$(sbindir)/glusterd
 	ln -s glusterfsd $(DESTDIR)$(sbindir)/glusterfs
 	ln -s glusterfsd $(DESTDIR)$(sbindir)/glusterd
+endif

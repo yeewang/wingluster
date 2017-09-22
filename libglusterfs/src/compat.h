@@ -392,6 +392,60 @@ int solaris_xattr_resolve_path (const char *real_path, char **path);
 
 #endif /* GF_SOLARIS_HOST_OS */
 
+#ifdef GF_CYGWIN_HOST_OS
+
+/* Posix dictates NAME_MAX to be used */
+# ifndef NAME_MAX
+#  ifdef  MAXNAMLEN
+#   define NAME_MAX MAXNAMLEN
+#  else
+#   define NAME_MAX MAX_PATH
+#  endif
+# endif
+
+#include <sys/un.h>
+#include <limits.h>
+#include <sys/xattr.h>
+//#include <linux/xattr.h>
+#include <endian.h>
+#ifdef HAVE_LINUX_FALLOC_H
+#include <linux/falloc.h>
+#endif
+
+#ifdef HAVE_ENDIAN_H
+#include <endian.h>
+#endif
+
+#include <libgen.h>
+
+#ifndef _PATH_UMOUNT
+#define _PATH_UMOUNT "/bin/umount"
+#endif
+#define GF_XATTR_NAME_MAX       XATTR_NAME_MAX
+
+#define XATTR_NAME_MAX 255
+
+#define F_GETLK64       F_GETLK
+#define F_SETLK64       F_SETLK
+#define F_SETLKW64      F_SETLKW
+//#define FALLOC_FL_KEEP_SIZE     0x01 /* default is extend size */
+//#define FALLOC_FL_PUNCH_HOLE    0x02 /* de-allocates range */
+//#define FALLOC_FL_ZERO_RANGE    0x10 /* zeroes out range */
+
+#ifndef EUCLEAN
+#define EUCLEAN 0
+#endif
+
+#ifndef O_ASYNC
+  #ifdef FASYNC
+    #define O_ASYNC FASYNC
+  #else
+    #define O_ASYNC 0
+  #endif
+#endif
+
+#endif /* GF_CYGWIN_HOST_OS */
+
 #ifndef HAVE_ARGP
 #include "argp.h"
 #else
@@ -432,6 +486,9 @@ dirent_size (struct dirent *entry)
 #ifdef GF_LINUX_HOST_OS
         size = GF_DIR_ALIGN (24 /* FIX MEEEE!!! */ + entry->d_reclen);
 #endif
+//#ifdef GF_CYGWIN_HOST_OS
+//        size = GF_DIR_ALIGN (24 /* FIX MEEEE!!! */ + entry->d_reclen);
+//#endif
 #ifdef GF_SOLARIS_HOST_OS
         size = GF_DIR_ALIGN (24 /* FIX MEEEE!!! */ + entry->d_reclen);
 #endif

@@ -35,7 +35,7 @@
  * SUCH DAMAGE.
  */
 
-#if !defined(GF_LINUX_HOST_OS)
+#if !defined(GF_LINUX_HOST_OS) && !defined(GF_CYGWIN_HOST_OS)
 
 #include <stdlib.h>
 #include <string.h>

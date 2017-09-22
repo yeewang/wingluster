@@ -18,7 +18,9 @@
 #include <urcu-call-rcu.h>
 
 #ifdef URCU_OLD
+#ifndef GF_CYGWIN_HOST_OS
 #include "rculist-extra.h"
+#endif
 #endif
 
 #include "xlator.h"

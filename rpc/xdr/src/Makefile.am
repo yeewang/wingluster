@@ -18,6 +18,10 @@ libgfxdr_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la
 
 libgfxdr_la_LDFLAGS = -version-info $(LIBGFXDR_LT_VERSION)
 
+if GF_CYGWIN_HOST_OS
+libgfxdr_la_LDFLAGS += -no-undefined
+endif
+
 libgfxdr_la_SOURCES = xdr-generic.c xdr-nfs3.c msg-nfs3.c
 nodist_libgfxdr_la_SOURCES = $(XDRSOURCES)
 

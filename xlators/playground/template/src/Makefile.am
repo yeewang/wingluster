@@ -2,6 +2,9 @@ xlator_LTLIBRARIES = template.la
 xlatordir = $(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/testing/features
 
 template_la_LDFLAGS = -module $(GF_XLATOR_DEFAULT_LDFLAGS)
+if GF_CYGWIN_HOST_OS
+template_la_LDFLAGS += -no-undefined
+endif
 
 template_la_SOURCES = template.c
 template_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la

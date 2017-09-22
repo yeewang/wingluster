@@ -1,6 +1,9 @@
 xlator_LTLIBRARIES = nl-cache.la
 xlatordir = $(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/performance
 nl_cache_la_LDFLAGS = -module -avoid-version
+if GF_CYGWIN_HOST_OS
+nl_cache_la_LDFLAGS += -no-undefined
+endif
 nl_cache_la_SOURCES = nl-cache.c nl-cache-helper.c
 nl_cache_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la
 noinst_HEADERS = nl-cache.h nl-cache-mem-types.h nl-cache-messages.h

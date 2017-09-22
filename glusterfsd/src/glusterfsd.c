@@ -49,7 +49,9 @@
 
 #ifdef HAVE_MALLOC_STATS
 #ifdef DEBUG
+#ifndef GF_CYGWIN_HOST_OS
 #include <mcheck.h>
+#endif /* GF_CYGWIN_HOST_OS */
 #endif
 #endif
 
@@ -1478,6 +1480,24 @@ gf_get_process_mode (char *exec_name)
         return ret;
 }
 
+#ifdef GF_CYGWIN_HOST_OS
+static uint8_t
+gf_get_process_mode_for_windows (char *mode)
+{
+        char *base = mode;
+        uint8_t ret = 0;
+
+        if (!strncmp (base, "server", 10)) {
+                ret = GF_SERVER_PROCESS;
+        } else if (!strncmp (base, "glusterd", 8)) {
+                ret = GF_GLUSTERD_PROCESS;
+        } else {
+                ret = GF_CLIENT_PROCESS;
+        }
+
+        return ret;
+}
+#endif /* GF_CYGWIN_HOST_OS */
 
 static int
 glusterfs_ctx_defaults_init (glusterfs_ctx_t *ctx)
@@ -1720,8 +1740,13 @@ print_exports_file (const char *exports_file)
         void (*exp_file_deinit)(struct exports_file *ptr) = NULL;
 
         /* XLATORDIR passed through a -D flag to GCC */
+#ifdef GF_CYGWIN_HOST_OS
+        ret = gf_asprintf (&libpathfull, "%s/%s/server.dll", XLATORDIR,
+                           "nfs");
+#else
         ret = gf_asprintf (&libpathfull, "%s/%s/server.so", XLATORDIR,
                            "nfs");
+#endif /* GF_CYGWIN_HOST_OS */
         if (ret < 0) {
                 gf_log ("glusterfs", GF_LOG_CRITICAL, "asprintf () failed.");
                 ret = -1;
@@ -1816,8 +1841,13 @@ print_netgroups_file (const char *netgroups_file)
         void         (*ng_file_deinit)(struct netgroups_file *ptr) = NULL;
 
         /* XLATORDIR passed through a -D flag to GCC */
+#ifdef GF_CYGWIN_HOST_OS
+        ret = gf_asprintf (&libpathfull, "%s/%s/server.dll", XLATORDIR,
+                        "nfs");
+#else
         ret = gf_asprintf (&libpathfull, "%s/%s/server.so", XLATORDIR,
                         "nfs");
+#endif /* GF_CYGWIN_HOST_OS */
         if (ret < 0) {
                 gf_log ("glusterfs", GF_LOG_CRITICAL, "asprintf () failed.");
                 ret = -1;
@@ -2227,6 +2257,11 @@ daemonize (glusterfs_ctx_t *ctx)
 
         if (cmd_args->debug_mode)
                 goto postfork;
+
+#ifdef GF_CYGWIN_HOST_OS
+                /* fork() cannot work well in cygwin. */
+                goto postfork;
+#endif /* GF_CYGWIN_HOST_OS */
 
         ret = pipe (ctx->daemon_pipe);
         if (ret) {

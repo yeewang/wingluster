@@ -24,7 +24,7 @@ static mach_timebase_info_data_t gf_timebase;
 
 void timespec_now (struct timespec *ts)
 {
-#if defined GF_LINUX_HOST_OS || defined GF_SOLARIS_HOST_OS || defined GF_BSD_HOST_OS
+#if defined GF_LINUX_HOST_OS || defined GF_SOLARIS_HOST_OS || defined GF_BSD_HOST_OS || defined GF_CYGWIN_HOST_OS
         if (0 == clock_gettime(CLOCK_MONOTONIC, ts))
                 return;
         else {

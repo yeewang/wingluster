@@ -12,8 +12,25 @@ libglusterfs_la_CPPFLAGS = $(GF_CPPFLAGS) -D__USE_FILE_OFFSET64 \
 	-DSBIN_DIR=\"$(sbindir)\" -I$(CONTRIBDIR)/timer-wheel \
 	-I$(CONTRIBDIR)/xxhash
 
-libglusterfs_la_LIBADD = @LEXLIB@ $(ZLIB_LIBS) $(MATH_LIB) $(UUID_LIBS)
+libglusterfs_la_LIBADD = $(ZLIB_LIBS) $(MATH_LIB) $(UUID_LIBS)
 libglusterfs_la_LDFLAGS = -version-info $(LIBGLUSTERFS_LT_VERSION)
+
+if GF_CYGWIN_HOST_OS
+#libglusterfs_la_CFLAGS += \
+#	-I$(top_builddir)/../cyguv/libuv/include
+
+#libglusterfs_la_CPPFLAGS += -I$(top_builddir)/../smartheap/cygheap \
+#	-I/usr/include/tirpc
+
+libglusterfs_la_LIBADD += -ltirpc -luv-1.9.1 -lsmartheap-0.1
+
+libglusterfs_la_LDFLAGS += -no-undefined
+#    -Wl,--out-implib=lib${module}.dll.a \
+#    -Wl,--export-all-symbols \
+#    -Wl,--enable-auto-import \
+#    -Wl,--whole-archive ${old_libs} \
+#    -Wl,--no-whole-archive ${dependency_libs}
+endif
 
 lib_LTLIBRARIES = libglusterfs.la
 libgfchangelogdir = $(includedir)/glusterfs/gfchangelog
@@ -39,6 +56,12 @@ libglusterfs_la_SOURCES = dict.c xlator.c logging.c \
 
 nodist_libglusterfs_la_SOURCES = y.tab.c graph.lex.c defaults.c
 nodist_libglusterfs_la_HEADERS = y.tab.h protocol-common.h
+
+#if GF_CYGWIN_HOST_OS
+#libglusterfs_la_SOURCES += syncop-win32.c event-win32.c event-poll-win32.c
+#else
+#libglusterfs_la_SOURCES += syncop.c event.c event-poll.c
+#endif
 
 BUILT_SOURCES = graph.lex.c defaults.c eventtypes.h protocol-common.h
 

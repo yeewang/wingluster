@@ -859,6 +859,9 @@ __socket_keepalive (int fd, int family, int keepaliveintvl,
 #if defined(GF_SOLARIS_HOST_OS) || defined(__FreeBSD__)
         ret = setsockopt (fd, SOL_SOCKET, SO_KEEPALIVE, &keepaliveintvl,
                           sizeof (keepaliveintvl));
+#elif defined(GF_CYGWIN_HOST_OS)
+        ret = setsockopt (fd, SOL_SOCKET, SO_KEEPALIVE, &keepaliveintvl,
+                          sizeof (keepaliveintvl));
 #else
         ret = setsockopt (fd, IPPROTO_TCP, TCP_KEEPALIVE, &keepaliveintvl,
                           sizeof (keepaliveintvl));
