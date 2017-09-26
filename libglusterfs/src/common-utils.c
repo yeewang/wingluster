@@ -2960,7 +2960,7 @@ get_mem_size ()
 {
         uint64_t memsize = -1;
 
-#if defined GF_LINUX_HOST_OS || defined GF_SOLARIS_HOST_OS
+#if defined GF_LINUX_HOST_OS || defined GF_SOLARIS_HOST_OS || defined GF_CYGWIN_HOST_OS
 
 	uint64_t page_size = 0;
 	uint64_t num_pages = 0;
@@ -3752,7 +3752,7 @@ gf_thread_create (pthread_t *thread, const pthread_attr_t *attr,
                   GF_THREAD_NAME_PREFIX, name);
 
         if (0 == ret && name) {
-                #ifdef GF_LINUX_HOST_OS
+                #if defined(GF_LINUX_HOST_OS) || defined(GF_CYGWIN_HOST_OS)
                         pthread_setname_np(*thread, thread_name);
                 #elif defined(__NetBSD__)
                         pthread_setname_np(*thread, thread_name, NULL);

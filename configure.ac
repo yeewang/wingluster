@@ -1231,8 +1231,8 @@ case $host_os in
         FUSE_CLIENT_SUBDIR="winfsp"
         GLUSTERD_WORKDIR="${LOCALSTATEDIR}/lib/glusterd"
         GF_CFLAGS="${GF_CFLAGS}"
-        GF_CPPFLAGS="${GF_CPPFLAGS} -I/usr/include/libxml2 -I/usr/include/tirpc -I/opt/include/libuv/include"
-        GF_LDFLAGS="${GF_LDFLAGS} -L/usr/lib -lsmartheap-0.1 -no-undefined"
+        GF_CPPFLAGS="${GF_CPPFLAGS} -I/usr/local/include -I/usr/include -I/usr/include/libxml2 -I/usr/include/tirpc -I/opt/include/libuv/include"
+        GF_LDFLAGS="${GF_LDFLAGS} -L/usr/local/lib -L/usr/lib -lsmartheap-0.1 -no-undefined"
         enable_shared=yes; enable_static=no
         ;;
 esac

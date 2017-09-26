@@ -67,11 +67,19 @@ CLEANFILES =
 
 EXTRA_DIST = dht.sym nufa.sym switch.sym tier.sym
 
+if GF_CYGWIN_HOST_OS
+uninstall-local:
+	rm -f $(DESTDIR)$(xlatordir)/distribute.dll
+
+install-data-hook:
+	cp .libs/dht.dll $(DESTDIR)$(xlatordir)/distribute.dll
+else
 uninstall-local:
 	rm -f $(DESTDIR)$(xlatordir)/distribute.so
 
 install-data-hook:
 	ln -sf dht.so $(DESTDIR)$(xlatordir)/distribute.so
+endif
 
 if UNITTEST
 CLEANFILES += *.gcda *.gcno *_xunit.xml

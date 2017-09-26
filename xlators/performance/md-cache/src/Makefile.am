@@ -16,14 +16,24 @@ AM_CFLAGS = -Wall $(GF_CFLAGS)
 
 CLEANFILES =
 
-
+if GF_CYGWIN_HOST_OS
+stat-prefetch-compat:
+	mkdir -p $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/performance
+	rm -rf $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/performance/stat-prefetch.dll
+	cp .libs/md-cache.dll $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/performance/stat-prefetch.dll
+else
 stat-prefetch-compat:
 	mkdir -p $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/performance
 	rm -rf $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/performance/stat-prefetch.so
 	ln -s ./md-cache.so $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/performance/stat-prefetch.so
-
+endif
 
 install-exec-local: stat-prefetch-compat
 
+if GF_CYGWIN_HOST_OS
+uninstall-local:
+	rm -f $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/performance/stat-prefetch.dll
+else
 uninstall-local:
 	rm -f $(DESTDIR)$(libdir)/glusterfs/$(PACKAGE_VERSION)/xlator/performance/stat-prefetch.so
+endif

@@ -28,7 +28,7 @@
 #include "rpcsvc.h"
 
 /* for TCP_USER_TIMEOUT */
-#if !defined(TCP_USER_TIMEOUT) && defined(GF_LINUX_HOST_OS)
+#if !defined(TCP_USER_TIMEOUT) && defined(GF_LINUX_HOST_OS) && defined(GF_CYGWIN_HOST_OS)
 #include <linux/tcp.h>
 #else
 #include <netinet/tcp.h>
@@ -54,7 +54,10 @@
 
 /* TBD: do automake substitutions etc. (ick) to set these. */
 #if !defined(DEFAULT_ETC_SSL)
-#  ifdef GF_LINUX_HOST_OS
+#  ifdef GF_LINUX_HOST_OS  && defined(GF_CYGWIN_HOST_OS)
+#    define DEFAULT_ETC_SSL "/etc/ssl"
+#  endif
+#  ifdef GF_CYGWIN_HOST_OS
 #    define DEFAULT_ETC_SSL "/etc/ssl"
 #  endif
 #  ifdef GF_BSD_HOST_OS
@@ -3233,6 +3236,7 @@ socket_connect (rpc_transport_t *this, int port)
                ign_enoent = dict_get_str_boolean (this->options,
                    "transport.socket.ignore-enoent", _gf_false);
 
+#ifndef GF_CYGWIN_HOST_OS
                 ret = client_bind (this, SA (&this->myinfo.sockaddr),
                                    &this->myinfo.sockaddr_len, priv->sock);
                 if (ret == -1) {
@@ -3240,6 +3244,7 @@ socket_connect (rpc_transport_t *this, int port)
                                 "client bind failed: %s", strerror (errno));
                         goto handler;
                 }
+#endif /* GF_CYGWIN_HOST_OS */
 
                 if (!priv->use_ssl && !priv->bio && !priv->own_thread) {
                         ret = __socket_nonblock (priv->sock);

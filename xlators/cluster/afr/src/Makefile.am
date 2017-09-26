@@ -28,8 +28,16 @@ AM_CFLAGS = -Wall $(GF_CFLAGS)
 
 CLEANFILES =
 
+if GF_CYGWIN_HOST_OS
+uninstall-local:
+	rm -f $(DESTDIR)$(xlatordir)/replicate.dll
+
+install-data-hook:
+	cp .libs/afr.dll $(DESTDIR)$(xlatordir)/replicate.dll
+else
 uninstall-local:
 	rm -f $(DESTDIR)$(xlatordir)/replicate.so
 
 install-data-hook:
 	ln -sf afr.so $(DESTDIR)$(xlatordir)/replicate.so
+endif

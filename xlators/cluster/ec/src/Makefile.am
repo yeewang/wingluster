@@ -76,8 +76,16 @@ AM_CFLAGS = -Wall $(GF_CFLAGS)
 
 CLEANFILES =
 
+if GF_CYGWIN_HOST_OS
+install-data-hook:
+	cp .libs/ec.dll $(DESTDIR)$(xlatordir)/disperse.dll
+
+uninstall-local:
+	rm -f $(DESTDIR)$(xlatordir)/disperse.dll
+else	
 install-data-hook:
 	ln -sf ec.so $(DESTDIR)$(xlatordir)/disperse.so
 
 uninstall-local:
 	rm -f $(DESTDIR)$(xlatordir)/disperse.so
+endif

@@ -55,7 +55,7 @@ AM_CPPFLAGS = $(GF_CPPFLAGS) -I$(top_srcdir)/libglusterfs/src \
 
 AM_CFLAGS = -Wall $(GF_CFLAGS) $(URCU_CFLAGS) $(URCU_CDS_CFLAGS)
 
-AM_LDFLAGS = -L$(xlatordir) $(URCU_LIBS) $(URCU_CDS_LIBS)
+AM_LDFLAGS = $(GF_LDFLAGS) -L$(xlatordir) $(URCU_LIBS) $(URCU_CDS_LIBS)
 
 CLEANFILES =
 
