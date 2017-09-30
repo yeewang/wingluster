@@ -436,12 +436,17 @@ unlock:
         return size;
 }
 
+int wsock_poll(struct pollfd* fds, int nfds, int timeout);
 
 static int
 event_dispatch_poll (struct event_pool *event_pool)
 {
         struct pollfd   *ufds = NULL;
+        struct pollfd    ufds_posix[1024];
+        struct pollfd    ufds_win[1024];
         int              size = 0;
+        int              size_posix = 0;
+        int              size_win = 0;
         int              i = 0;
         int              ret = -1;
 
@@ -468,21 +473,64 @@ event_dispatch_poll (struct event_pool *event_pool)
                 size = event_dispatch_poll_resize (event_pool, ufds, size);
                 ufds = event_pool->evcache;
 
-                ret = poll (ufds, size, 1);
+                size_posix = 0;
+                size_win = 0;
+                for (int i = 0; i < size; i++) {
+                        if (ufds[i].fd < 100) {
+                                ufds_posix[size_posix] = ufds[i];
+                                size_posix++;
+                        } else {
+                                ufds_win[size_win] = ufds[i];
+                                size_win++;
+                        }
+static int ddd = 0;
+#ifdef NEVER
+                        gf_msg ("poll", GF_LOG_DEBUG, 0,
+                                LG_MSG_INVALID_POLL_IN,
+                                "socket polling: total = %d, fd = %d, %d", size, ufds[i].fd, ddd);
+#endif /* NEVER */
+                }
 
-                if (ret == 0)
-                        /* timeout */
-                        continue;
+                if (size_win > 0) {
+                        ret = wsock_poll (ufds_win, size_win, 5000);
+#ifdef NEVER
+                gf_msg ("poll", GF_LOG_DEBUG, 0,
+                        LG_MSG_INVALID_POLL_IN,
+                        "socket polling return: ret = %d", ret);
+#endif /* NEVER */
 
-                if (ret == -1 && errno == EINTR)
-                        /* sys call */
-                        continue;
-
-                for (i = 0; i < size; i++) {
-                        if (!ufds[i].revents)
+                        if (ret == 0)
+                                /* timeout */
                                 continue;
 
-                        event_dispatch_poll_handler (event_pool, ufds, i);
+                        if (ret == -1 && errno == EINTR)
+                                /* sys call */
+                                continue;
+
+                        for (i = 0; i < size_win; i++) {
+                                if (!ufds_win[i].revents)
+                                        continue;
+
+                                event_dispatch_poll_handler (event_pool, ufds_win, i);
+                        }
+                }
+                else if (ufds_posix > 0) {
+                        ret = poll (ufds_posix, size_posix, 1);
+
+                        if (ret == 0)
+                                /* timeout */
+                                continue;
+
+                        if (ret == -1 && errno == EINTR)
+                                /* sys call */
+                                continue;
+
+                        for (i = 0; i < size_posix; i++) {
+                                if (!ufds_posix[i].revents)
+                                        continue;
+
+                                event_dispatch_poll_handler (event_pool, ufds_posix, i);
+                        }
                 }
         }
 

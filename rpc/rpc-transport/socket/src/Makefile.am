@@ -11,6 +11,10 @@ socket_la_LIBADD = $(top_builddir)/libglusterfs/src/libglusterfs.la \
 				   $(top_builddir)/rpc/rpc-lib/src/libgfrpc.la \
                    -lssl
 
+if GF_CYGWIN_HOST_OS
+#socket_la_SOURCES += winsocks.c
+endif
+
 AM_CPPFLAGS = $(GF_CPPFLAGS) \
 	-I$(top_srcdir)/libglusterfs/src \
 	-I$(top_srcdir)/rpc/rpc-lib/src/ \

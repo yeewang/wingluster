@@ -1281,7 +1281,9 @@ _gf_msg_nomem (const char *domain, const char *file,
                 }
                 pthread_mutex_unlock (&ctx->log.logfile_mutex);
 
+#ifndef GF_CYGWIN_HOST_OS
                 _gf_msg_backtrace_nomem (level, GF_LOG_BACKTRACE_DEPTH);
+#endif /* GF_CYGWIN_HOST_OS */
 
                 break;
         }
@@ -2069,6 +2071,7 @@ _gf_msg (const char *domain, const char *file, const char *function,
         if (skip_logging (this, level))
                 goto out;
 
+#ifndef GF_CYGWIN_HOST_OS
         if (trace) {
                 ret = _gf_msg_backtrace (GF_LOG_BACKTRACE_DEPTH, callstr,
                                          GF_LOG_BACKTRACE_SIZE);
@@ -2077,6 +2080,7 @@ _gf_msg (const char *domain, const char *file, const char *function,
                 else
                         ret = 0;
         }
+#endif /* GF_CYGWIN_HOST_OS */
 
         pthread_mutex_lock (&ctx->log.logfile_mutex);
         {

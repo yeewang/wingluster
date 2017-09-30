@@ -22,6 +22,7 @@
 #include "rpc-transport.h"
 #include "socket.h"
 #include "common-utils.h"
+#include "winsocks.h"
 
 static void
 _assign_port (struct sockaddr *sockaddr, uint16_t port)
@@ -44,7 +45,7 @@ af_inet_bind_to_port_lt_ceiling (int fd, struct sockaddr *sockaddr,
 {
 #if GF_DISABLE_PRIVPORT_TRACKING
         _assign_port (sockaddr, 0);
-        return bind (fd, sockaddr, sockaddr_len);
+        return wsock_bind (fd, sockaddr, sockaddr_len);
 #else
         int32_t         ret                             = -1;
         uint16_t        port                            = ceiling - 1;
@@ -68,7 +69,7 @@ loop:
 
                 _assign_port (sockaddr, port);
 
-                ret = bind (fd, sockaddr, sockaddr_len);
+                ret = wsock_bind (fd, sockaddr, sockaddr_len);
 
                 if (ret == 0)
                         break;
@@ -117,7 +118,7 @@ af_unix_client_bind (rpc_transport_t *this,
 
                 addr = (struct sockaddr_un *) sockaddr;
                 strcpy (addr->sun_path, path);
-                ret = bind (sock, (struct sockaddr *)addr, sockaddr_len);
+                ret = wsock_bind (sock, (struct sockaddr *)addr, sockaddr_len);
                 if (ret == -1) {
                         gf_log (this->name, GF_LOG_ERROR,
                                 "cannot bind to unix-domain socket %d (%s)",
@@ -697,7 +698,7 @@ fill_inet6_inet_identifiers (rpc_transport_t *this, struct sockaddr_storage *add
                 }
         }
 
-        ret = getnameinfo (&sock_union.sa,
+        ret = wsock_getnameinfo (&sock_union.sa,
                            tmpaddr_len,
                            host, sizeof (host),
                            service, sizeof (service),

@@ -334,10 +334,6 @@ realloc_safe(void *ptr, size_t size)
 int
 backtrace(void **buffer, int size)
 {
-#ifdef GF_CYGWIN_HOST_OS
-        buffer[0] = getreturnaddr(1);
-        return 0;
-#else
         int i;
 
         for (i = 1; getframeaddr(i + 1) != NULL && i != size + 1; i++) {
@@ -346,7 +342,6 @@ backtrace(void **buffer, int size)
                         break;
         }
         return i - 1;
-#endif /* GF_CYGWIN_HOST_OS */
 }
 
 char **

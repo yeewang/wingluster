@@ -34,6 +34,8 @@
 #include <netinet/tcp.h>
 #endif
 
+#include "winsocks.h"
+
 #include <fcntl.h>
 #include <errno.h>
 #include <rpc/xdr.h>
@@ -54,7 +56,7 @@
 
 /* TBD: do automake substitutions etc. (ick) to set these. */
 #if !defined(DEFAULT_ETC_SSL)
-#  ifdef GF_LINUX_HOST_OS  && defined(GF_CYGWIN_HOST_OS)
+#  if defined GF_LINUX_HOST_OS  && defined GF_CYGWIN_HOST_OS
 #    define DEFAULT_ETC_SSL "/etc/ssl"
 #  endif
 #  ifdef GF_CYGWIN_HOST_OS
@@ -394,7 +396,11 @@ __socket_ssl_readv (rpc_transport_t *this, struct iovec *opvector, int opcount)
 	if (priv->use_ssl) {
 		ret = ssl_read_one (this, opvector->iov_base, opvector->iov_len);
 	} else {
+#ifndef GF_CYGWIN_HOST_OS
 		ret = sys_readv (sock, opvector, IOV_MIN(opcount));
+#else
+                ret = wsock_recvv (sock, opvector, IOV_MIN(opcount));
+#endif /* GF_CYGWIN_HOST_OS */
 	}
 
 	return ret;
@@ -550,7 +556,11 @@ __socket_rwv (rpc_transport_t *this, struct iovec *vector, int count,
                                 ret = ssl_write_one (this, opvector->iov_base,
                                                      opvector->iov_len);
 			} else {
+#ifndef GF_CYGWIN_HOST_OS
 				ret = sys_writev (sock, opvector, IOV_MIN(opcount));
+#else
+                                ret = wsock_sendv (sock, opvector, IOV_MIN(opcount));
+#endif /* GF_CYGWIN_HOST_OS */
 			}
 
                         if (ret == 0 || (ret == -1 && errno == EAGAIN)) {
@@ -680,7 +690,7 @@ __socket_shutdown (rpc_transport_t *this)
         socket_private_t *priv = this->private;
 
         priv->connected = -1;
-        ret = shutdown (priv->sock, SHUT_RDWR);
+        ret = wsock_shutdown (priv->sock, SHUT_RDWR);
         if (ret) {
                 /* its already disconnected.. no need to understand
                    why it failed to shutdown in normal cases */
@@ -779,18 +789,22 @@ __socket_server_bind (rpc_transport_t *this)
         if (AF_UNIX == SA (&this->myinfo.sockaddr)->sa_family) {
                 memcpy (&unix_addr, SA (&this->myinfo.sockaddr),
                         this->myinfo.sockaddr_len);
-                reuse_check_sock = socket (AF_UNIX, SOCK_STREAM, 0);
+                reuse_check_sock = wsock_socket (AF_UNIX, SOCK_STREAM, 0);
                 if (reuse_check_sock >= 0) {
-                        ret = connect (reuse_check_sock, SA (&unix_addr),
+                        ret = wsock_connect (reuse_check_sock, SA (&unix_addr),
                                        this->myinfo.sockaddr_len);
                         if ((ret == -1) && (ECONNREFUSED == errno)) {
                                 sys_unlink (((struct sockaddr_un *)&unix_addr)->sun_path);
                         }
+#ifndef GF_CYGWIN_HOST_OS
                         sys_close (reuse_check_sock);
+#else
+                        wsock_closesocket (reuse_check_sock);
+#endif /* GF_CYGWIN_HOST_OS */
                 }
         }
 
-        ret = bind (priv->sock, (struct sockaddr *)&this->myinfo.sockaddr,
+        ret = wsock_bind (priv->sock, (struct sockaddr *)&this->myinfo.sockaddr,
                     this->myinfo.sockaddr_len);
 
         if (ret == -1) {
@@ -813,13 +827,18 @@ out:
 static int
 __socket_nonblock (int fd)
 {
-        int flags = 0;
+        long flags = 0;
         int ret = -1;
 
+#ifndef GF_CYGWIN_HOST_OS
         flags = fcntl (fd, F_GETFL);
 
         if (flags != -1)
                 ret = fcntl (fd, F_SETFL, flags | O_NONBLOCK);
+#else
+        flags = 1;
+        ret = wsock_ioctlsocket(fd, FIONBIO, &flags);
+#endif /* GF_CYGWIN_HOST_OS */
 
         return ret;
 }
@@ -830,11 +849,15 @@ __socket_nodelay (int fd)
         int     on = 1;
         int     ret = -1;
 
+#ifndef GF_CYGWIN_HOST_OS
         ret = setsockopt (fd, IPPROTO_TCP, TCP_NODELAY,
                           &on, sizeof (on));
         if (!ret)
                 gf_log (THIS->name, GF_LOG_TRACE,
                         "NODELAY enabled for socket %d", fd);
+#else
+        ret = wsock_tcp_nodelay (fd, on);
+#endif /* GF_CYGWIN_HOST_OS */
 
         return ret;
 }
@@ -848,6 +871,7 @@ __socket_keepalive (int fd, int family, int keepaliveintvl,
         int     ret = -1;
         int     timeout_ms = timeout * 1000;
 
+#ifndef GF_CYGWIN_HOST_OS
         ret = setsockopt (fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof (on));
         if (ret == -1) {
                 gf_log ("socket", GF_LOG_WARNING,
@@ -860,9 +884,6 @@ __socket_keepalive (int fd, int family, int keepaliveintvl,
 
 #if !defined(GF_LINUX_HOST_OS) && !defined(__NetBSD__)
 #if defined(GF_SOLARIS_HOST_OS) || defined(__FreeBSD__)
-        ret = setsockopt (fd, SOL_SOCKET, SO_KEEPALIVE, &keepaliveintvl,
-                          sizeof (keepaliveintvl));
-#elif defined(GF_CYGWIN_HOST_OS)
         ret = setsockopt (fd, SOL_SOCKET, SO_KEEPALIVE, &keepaliveintvl,
                           sizeof (keepaliveintvl));
 #else
@@ -918,6 +939,26 @@ __socket_keepalive (int fd, int family, int keepaliveintvl,
         }
 #endif
 #endif
+#else
+        ret = wsock_tcp_keepalive (fd, on, timeout_ms);
+        if (ret == -1) {
+                gf_log ("socket", GF_LOG_WARNING,
+                        "failed to set keep alive option on socket %d", fd);
+                goto err;
+        }
+
+#if defined(TCP_KEEPCNT)
+        ret = wsock_setsockopt (fd, IPPROTO_TCP, TCP_KEEPCNT, &keepalivecnt,
+                          sizeof (keepalivecnt));
+        if (ret == -1) {
+                gf_log ("socket", GF_LOG_WARNING, "failed to set "
+                        "TCP_KEEPCNT %d on socket %d, %s", keepalivecnt, fd,
+                        strerror(errno));
+                goto err;
+        }
+#endif
+#endif /* GF_CYGWIN_HOST_OS */
+
 
 done:
         gf_log (THIS->name, GF_LOG_TRACE, "Keep-alive enabled for socket: %d, "
@@ -937,7 +978,7 @@ __socket_connect_finish (int fd)
         int       optval = 0;
         socklen_t optlen = sizeof (int);
 
-        ret = getsockopt (fd, SOL_SOCKET, SO_ERROR, (void *)&optval, &optlen);
+        ret = wsock_getsockopt (fd, SOL_SOCKET, SO_ERROR, (void *)&optval, &optlen);
 
         if (ret == 0 && optval) {
                 errno = optval;
@@ -2385,7 +2426,7 @@ socket_connect_finish (rpc_transport_t *this)
                         this->myinfo.sockaddr_len =
                                 sizeof (this->myinfo.sockaddr);
 
-                        ret = getsockname (priv->sock,
+                        ret = wsock_getsockname (priv->sock,
                                            SA (&this->myinfo.sockaddr),
                                            &this->myinfo.sockaddr_len);
                         if (ret == -1) {
@@ -2660,7 +2701,11 @@ err:
         {
                 gf_log (this->name, GF_LOG_TRACE, "disconnecting socket");
                 __socket_teardown_connection (this);
+#ifndef GF_CYGWIN_HOST_OS
                 sys_close (priv->sock);
+#else
+                wsock_closesocket (priv->sock);
+#endif /* GF_CYGWIN_HOST_OS */
                 priv->sock = -1;
 
                 sys_close (priv->pipe[0]);
@@ -2750,7 +2795,7 @@ socket_server_event_handler (int fd, int idx, int gen, void *data,
         priv->idx = idx;
 
         if (poll_in) {
-                new_sock = accept (priv->sock, SA (&new_sockaddr), &addrlen);
+                new_sock = wsock_accept (priv->sock, SA (&new_sockaddr), &addrlen);
 
                 if (new_sock == -1) {
                         gf_log (this->name, GF_LOG_WARNING,
@@ -2786,7 +2831,11 @@ socket_server_event_handler (int fd, int idx, int gen, void *data,
                 new_trans = GF_CALLOC (1, sizeof (*new_trans),
                                 gf_common_mt_rpc_trans_t);
                 if (!new_trans) {
+#ifndef GF_CYGWIN_HOST_OS
                         sys_close (new_sock);
+#else
+                        wsock_closesocket (new_sock);
+#endif /* GF_CYGWIN_HOST_OS */
                         goto out;
                 }
 
@@ -2795,7 +2844,11 @@ socket_server_event_handler (int fd, int idx, int gen, void *data,
                         gf_log (this->name, GF_LOG_WARNING,
                                 "pthread_mutex_init() failed: %s",
                                 strerror (errno));
+#ifndef GF_CYGWIN_HOST_OS
                         sys_close (new_sock);
+#else
+                        wsock_closesocket (new_sock);
+#endif /* GF_CYGWIN_HOST_OS */
                         GF_FREE (new_trans);
                         goto out;
                 }
@@ -2814,7 +2867,12 @@ socket_server_event_handler (int fd, int idx, int gen, void *data,
                         gf_log (this->name, GF_LOG_WARNING,
                                 "getsockname on %d failed (%s)",
                                 new_sock, strerror (errno));
+#ifndef GF_CYGWIN_HOST_OS
                         sys_close (new_sock);
+#else
+                        wsock_closesocket (new_sock);
+#endif /* GF_CYGWIN_HOST_OS */
+
                         GF_FREE (new_trans->name);
                         GF_FREE (new_trans);
                         goto out;
@@ -2823,7 +2881,12 @@ socket_server_event_handler (int fd, int idx, int gen, void *data,
                 get_transport_identifiers (new_trans);
                 ret = socket_init(new_trans);
                 if (ret != 0) {
+#ifndef GF_CYGWIN_HOST_OS
                         sys_close (new_sock);
+#else
+                        wsock_closesocket (new_sock);
+#endif /* GF_CYGWIN_HOST_OS */
+
                         GF_FREE (new_trans->name);
                         GF_FREE (new_trans);
                         goto out;
@@ -2864,7 +2927,11 @@ socket_server_event_handler (int fd, int idx, int gen, void *data,
                         if (!cname) {
                                 gf_log(this->name, GF_LOG_ERROR,
                                        "server setup failed");
+#ifndef GF_CYGWIN_HOST_OS
                                 sys_close (new_sock);
+#else
+                                wsock_closesocket (new_sock);
+#endif /* GF_CYGWIN_HOST_OS */
                                 GF_FREE (new_trans->name);
                                 GF_FREE (new_trans);
                                 goto out;
@@ -2880,7 +2947,12 @@ socket_server_event_handler (int fd, int idx, int gen, void *data,
                                         "NBIO on %d failed (%s)",
                                         new_sock, strerror (errno));
 
+#ifndef GF_CYGWIN_HOST_OS
                                 sys_close (new_sock);
+#else
+                                wsock_closesocket (new_sock);
+#endif /* GF_CYGWIN_HOST_OS */
+
                                 GF_FREE (new_trans->name);
                                 GF_FREE (new_trans);
                                 goto out;
@@ -2966,7 +3038,11 @@ socket_server_event_handler (int fd, int idx, int gen, void *data,
                 }
 
                 if (ret == -1) {
+#ifndef GF_CYGWIN_HOST_OS
                         sys_close (new_sock);
+#else
+                        wsock_closesocket (new_sock);
+#endif /* GF_CYGWIN_HOST_OS */
                         /* this unref is to actually cause the destruction of
                          * the new_trans since we've failed at everything so far
                          */
@@ -3078,7 +3154,7 @@ connect_loop (int sockfd, const struct sockaddr *addr, socklen_t addrlen)
         int     connect_fails   = 0;
 
         for (;;) {
-                ret = connect (sockfd, addr, addrlen);
+                ret = wsock_connect (sockfd, addr, addrlen);
                 if (ret >= 0) {
                         break;
                 }
@@ -3161,7 +3237,7 @@ socket_connect (rpc_transport_t *this, int port)
                         sockaddr_len);
                 this->peerinfo.sockaddr_len = sockaddr_len;
 
-                priv->sock = socket (sa_family, SOCK_STREAM, 0);
+                priv->sock = wsock_socket (sa_family, SOCK_STREAM, 0);
                 if (priv->sock == -1) {
                         gf_log (this->name, GF_LOG_ERROR,
                                 "socket creation failed (%s)",
@@ -3174,7 +3250,7 @@ socket_connect (rpc_transport_t *this, int port)
                  * working nonetheless.
                  */
                 if (priv->windowsize != 0) {
-                        if (setsockopt (priv->sock, SOL_SOCKET, SO_RCVBUF,
+                        if (wsock_setsockopt (priv->sock, SOL_SOCKET, SO_RCVBUF,
                                         &priv->windowsize,
                                         sizeof (priv->windowsize)) < 0) {
                                 gf_log (this->name, GF_LOG_ERROR,
@@ -3184,7 +3260,7 @@ socket_connect (rpc_transport_t *this, int port)
                                         strerror (errno));
                         }
 
-                        if (setsockopt (priv->sock, SOL_SOCKET, SO_SNDBUF,
+                        if (wsock_setsockopt (priv->sock, SOL_SOCKET, SO_SNDBUF,
                                         &priv->windowsize,
                                         sizeof (priv->windowsize)) < 0) {
                                 gf_log (this->name, GF_LOG_ERROR,
@@ -3262,7 +3338,7 @@ socket_connect (rpc_transport_t *this, int port)
                                             SA (&this->peerinfo.sockaddr),
                                             this->peerinfo.sockaddr_len);
                 } else {
-                        ret = connect (priv->sock,
+                        ret = wsock_connect (priv->sock,
                                        SA (&this->peerinfo.sockaddr),
                                        this->peerinfo.sockaddr_len);
                 }
@@ -3347,7 +3423,7 @@ handler:
                            should be handled in the socket handler.  shutdown(2)
                            will result in EPOLLERR, so cleanup is done in
                            socket_event_handler or socket_poller */
-                        shutdown (priv->sock, SHUT_RDWR);
+                        wsock_shutdown (priv->sock, SHUT_RDWR);
                 }
 
                 /*
@@ -3363,7 +3439,11 @@ handler:
                         if (priv->connect_failed) {
                                 gf_msg_debug (this->name, 0,
                                               "socket connect is failed so close it");
+#ifndef GF_CYGWIN_HOST_OS
                                 sys_close (priv->sock);
+#else
+                                wsock_closesocket (priv->sock);
+#endif /* GF_CYGWIN_HOST_OS */
                                 priv->sock = -1;
                                 ret = -1;
                                 goto unlock;
@@ -3381,7 +3461,12 @@ handler:
                                        "could not spawn thread");
                                 sys_close (priv->pipe[0]);
                                 sys_close (priv->pipe[1]);
+#ifndef GF_CYGWIN_HOST_OS
                                 sys_close (priv->sock);
+#else
+                                wsock_closesocket (priv->sock);
+#endif /* GF_CYGWIN_HOST_OS */
+
                                 priv->sock = -1;
                         }
                 }
@@ -3392,7 +3477,12 @@ handler:
                         if (priv->idx == -1) {
                                 gf_log ("", GF_LOG_WARNING,
                                         "failed to register the event");
+#ifndef GF_CYGWIN_HOST_OS
                                 sys_close (priv->sock);
+#else
+                                wsock_closesocket (priv->sock);
+#endif /* GF_CYGWIN_HOST_OS */
+
                                 priv->sock = -1;
                                 ret = -1;
                         }
@@ -3480,7 +3570,7 @@ socket_listen (rpc_transport_t *this)
                 memcpy (&myinfo->sockaddr, &sockaddr, sockaddr_len);
                 myinfo->sockaddr_len = sockaddr_len;
 
-                priv->sock = socket (sa_family, SOCK_STREAM, 0);
+                priv->sock = wsock_socket (sa_family, SOCK_STREAM, 0);
 
                 if (priv->sock == -1) {
                         gf_log (this->name, GF_LOG_ERROR,
@@ -3493,7 +3583,7 @@ socket_listen (rpc_transport_t *this)
                  * working nonetheless.
                  */
                 if (priv->windowsize != 0) {
-                        if (setsockopt (priv->sock, SOL_SOCKET, SO_RCVBUF,
+                        if (wsock_setsockopt (priv->sock, SOL_SOCKET, SO_RCVBUF,
                                         &priv->windowsize,
                                         sizeof (priv->windowsize)) < 0) {
                                 gf_log (this->name, GF_LOG_ERROR,
@@ -3503,7 +3593,7 @@ socket_listen (rpc_transport_t *this)
                                         strerror (errno));
                         }
 
-                        if (setsockopt (priv->sock, SOL_SOCKET, SO_SNDBUF,
+                        if (wsock_setsockopt (priv->sock, SOL_SOCKET, SO_SNDBUF,
                                         &priv->windowsize,
                                         sizeof (priv->windowsize)) < 0) {
                                 gf_log (this->name, GF_LOG_ERROR,
@@ -3530,7 +3620,11 @@ socket_listen (rpc_transport_t *this)
                                 gf_log (this->name, GF_LOG_ERROR,
                                         "NBIO on %d failed (%s)",
                                         priv->sock, strerror (errno));
+#ifndef GF_CYGWIN_HOST_OS
                                 sys_close (priv->sock);
+#else
+                                wsock_closesocket (priv->sock);
+#endif /* GF_CYGWIN_HOST_OS */
                                 priv->sock = -1;
                                 goto unlock;
                         }
@@ -3540,18 +3634,28 @@ socket_listen (rpc_transport_t *this)
 
                 if ((ret == -EADDRINUSE) || (ret == -1)) {
                         /* logged inside __socket_server_bind() */
+#ifndef GF_CYGWIN_HOST_OS
                         sys_close (priv->sock);
+#else
+                        wsock_closesocket (priv->sock);
+#endif /* GF_CYGWIN_HOST_OS */
+
                         priv->sock = -1;
                         goto unlock;
                 }
 
-                ret = listen (priv->sock, priv->backlog);
+                ret = wsock_listen (priv->sock, priv->backlog);
 
                 if (ret == -1) {
                         gf_log (this->name, GF_LOG_ERROR,
                                 "could not set socket %d to listen mode (%s)",
                                 priv->sock, strerror (errno));
+#ifndef GF_CYGWIN_HOST_OS
                         sys_close (priv->sock);
+#else
+                        wsock_closesocket (priv->sock);
+#endif /* GF_CYGWIN_HOST_OS */
+
                         priv->sock = -1;
                         goto unlock;
                 }
@@ -3567,7 +3671,12 @@ socket_listen (rpc_transport_t *this)
                                 "could not register socket %d with events",
                                 priv->sock);
                         ret = -1;
+#ifndef GF_CYGWIN_HOST_OS
                         sys_close (priv->sock);
+#else
+                        wsock_closesocket (priv->sock);
+#endif /* GF_CYGWIN_HOST_OS */
+
                         priv->sock = -1;
                         goto unlock;
                 }

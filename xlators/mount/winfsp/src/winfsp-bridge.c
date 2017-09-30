@@ -1534,15 +1534,15 @@ winfsp_get_req (xlator_t* this, int type, size_t size)
 
         INIT_FUSE_HEADER (msg->finh, msg->unique, type, ctx);
 
-#if 1 // def NEVER
+#ifdef NEVER
         // msg->finh->pid = 0;
         msg->finh->uid = 0;
         msg->finh->gid = 0;
-#endif /* NEVER */
 
         gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
                 "winfsp_get_req with Auth Info: pid=%d, uid=%d, gid=%d",
                 msg->finh->pid, msg->finh->uid, msg->finh->gid);
+#endif /* NEVER */
 
         uv_mutex_init (&msg->mutex);
         uv_cond_init (&msg->cond);
