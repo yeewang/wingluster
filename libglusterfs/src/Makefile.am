@@ -58,10 +58,8 @@ nodist_libglusterfs_la_SOURCES = y.tab.c graph.lex.c defaults.c
 nodist_libglusterfs_la_HEADERS = y.tab.h protocol-common.h
 
 if GF_CYGWIN_HOST_OS
-#libglusterfs_la_SOURCES += syncop-win32.c event-win32.c event-poll-win32.c
+#libglusterfs_la_SOURCES += syncop-win32.c
 libglusterfs_la_SOURCES += winsocks.c
-else
-#libglusterfs_la_SOURCES += syncop.c event.c event-poll.c
 endif
 
 BUILT_SOURCES = graph.lex.c defaults.c eventtypes.h protocol-common.h

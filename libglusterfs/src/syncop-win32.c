@@ -369,7 +369,7 @@ synctask_wake (struct synctask *task)
 }
 
 void
-synctask_wrap (struct synctask *old_task)
+synctask_wrap (void)
 {
         struct synctask *task = NULL;
 
@@ -583,6 +583,7 @@ synctask_new1 (struct syncenv *env, size_t stacksize, synctask_fn_t fn,
         return ret;
 }
 
+
 int
 synctask_new (struct syncenv *env, synctask_fn_t fn, synctask_cbk_t cbk,
               call_frame_t *frame, void *opaque)
@@ -662,8 +663,8 @@ synctask_switchto (struct synctask *task)
 #endif
 
         if (swapcontext (&task->proc->sched, &task->ctx) < 0) {
-        gf_msg ("syncop", GF_LOG_ERROR, errno, LG_MSG_SWAPCONTEXT_FAILED,
-                "swapcontext failed");
+                gf_msg ("syncop", GF_LOG_ERROR, errno,
+                        LG_MSG_SWAPCONTEXT_FAILED, "swapcontext failed");
         }
 
         if (task->state == SYNCTASK_DONE) {
@@ -714,6 +715,7 @@ syncenv_scale (struct syncenv *env)
         int  scale = 0;
         int  i = 0;
         int  ret = 0;
+        char thread_name[GF_THREAD_NAMEMAX] = {0,};
 
         uv_mutex_lock (&env->mutex);
         {
@@ -733,8 +735,11 @@ syncenv_scale (struct syncenv *env)
                         }
 
                         env->proc[i].env = env;
+                        snprintf (thread_name, sizeof(thread_name),
+                                  "%s%d", "sproc", env->procs);
                         ret = gf_thread_create (&env->proc[i].processor, NULL,
-						syncenv_processor, &env->proc[i]);
+                                                syncenv_processor,
+                                                &env->proc[i], thread_name);
                         if (ret)
                                 break;
                         env->procs++;
@@ -798,6 +803,7 @@ syncenv_new (size_t stacksize, int procmin, int procmax)
         struct syncenv *newenv = NULL;
         int             ret = 0;
         int             i = 0;
+        char            thread_name[GF_THREAD_NAMEMAX] = {0,};
 
 	if (!procmin || procmin < 0)
 		procmin = SYNCENV_PROC_MIN;
@@ -827,14 +833,17 @@ syncenv_new (size_t stacksize, int procmin, int procmax)
         for (i = 0; i < newenv->procmin; i++) {
                 newenv->proc[i].env = newenv;
                 ret = gf_thread_create (&newenv->proc[i].processor, NULL,
-					syncenv_processor, &newenv->proc[i]);
+                                        syncenv_processor, &newenv->proc[i],
+                                        thread_name);
                 if (ret)
                         break;
                 newenv->procs++;
         }
 
-        if (ret != 0)
+        if (ret != 0) {
                 syncenv_destroy (newenv);
+                newenv = NULL;
+        }
 
         return newenv;
 }
@@ -896,7 +905,7 @@ __synclock_lock (struct synclock *lock)
                         }
                         break;
                 case LOCK_THREAD:
-                        if (pthread_self () == lock->owner_tid) {
+                        if (pthread_equal(pthread_self (), lock->owner_tid)) {
                                 lock->lock++;
                                 gf_msg_trace ("", 0, "Recursive lock called by"
                                               " thread ,owner=%u lock=%d",
@@ -916,6 +925,7 @@ __synclock_lock (struct synclock *lock)
         while (lock->lock) {
                 if (task) {
                         /* called within a synctask */
+                        task->woken = 0;
                         list_add_tail (&task->waitq, &lock->waitq);
                         uv_mutex_unlock (&lock->guard);
                         synctask_yield (task);
@@ -1015,7 +1025,7 @@ __synclock_unlock (synclock_t *lock)
 
                 break;
         case LOCK_THREAD:
-                if (pthread_self () == lock->owner_tid) {
+                if (pthread_equal(pthread_self (), lock->owner_tid)) {
                         lock->lock--;
                         gf_msg_trace ("", 0, "Unlock success %u, remaining "
                                       "locks=%d",
@@ -1163,6 +1173,8 @@ __syncbarrier_wake (struct syncbarrier *barrier)
 	}
 
 	barrier->count++;
+        if (barrier->waitfor && (barrier->count < barrier->waitfor))
+                return 0;
 
 	uv_cond_signal (&barrier->cond);
 	if (!list_empty (&barrier->waitq)) {
@@ -1170,6 +1182,7 @@ __syncbarrier_wake (struct syncbarrier *barrier)
                 list_del_init (&task->waitq);
 		synctask_wake (task);
 	}
+        barrier->waitfor = 0;
 
 	return 0;
 }
@@ -1204,12 +1217,12 @@ syncop_lookup_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 
         args->op_ret   = op_ret;
         args->op_errno = op_errno;
+        if (xdata)
+                args->xdata  = dict_ref (xdata);
 
         if (op_ret == 0) {
                 args->iatt1  = *iatt;
                 args->iatt2  = *parent;
-                if (xdata)
-                        args->xdata  = dict_ref (xdata);
         }
 
         __wake (args);
@@ -1570,7 +1583,7 @@ syncop_setxattr_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 
 int
 syncop_setxattr (xlator_t *subvol, loc_t *loc, dict_t *dict, int32_t flags,
-		 dict_t *xdata_in, dict_t **xdata_out)
+                 dict_t *xdata_in, dict_t **xdata_out)
 {
         struct syncargs args = {0, };
 
@@ -2842,6 +2855,91 @@ syncop_ipc (xlator_t *subvol, int32_t op, dict_t *xdata_in, dict_t **xdata_out)
 }
 
 int
+syncop_seek_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
+                 int op_ret, int op_errno, off_t offset, dict_t *xdata)
+{
+        struct syncargs *args = NULL;
+
+        args = cookie;
+
+        args->op_ret   = op_ret;
+        args->op_errno = op_errno;
+        args->offset   = offset;
+        if (xdata)
+                args->xdata  = dict_ref (xdata);
+
+        __wake (args);
+
+        return 0;
+}
+
+int
+syncop_seek (xlator_t *subvol, fd_t *fd, off_t offset, gf_seek_what_t what,
+             dict_t *xdata_in, off_t *off)
+{
+        struct syncargs args = {0, };
+
+        SYNCOP (subvol, (&args), syncop_seek_cbk, subvol->fops->seek, fd,
+                offset, what, xdata_in);
+
+        if (*off)
+                *off = args.offset;
+
+        if (args.op_ret == -1)
+                return -args.op_errno;
+        return args.op_ret;
+}
+
+int
+syncop_lease_cbk (call_frame_t *frame, void *cookie, xlator_t *this, int op_ret,
+                  int op_errno, struct gf_lease *lease, dict_t *xdata)
+{
+        struct syncargs *args = NULL;
+
+        args = cookie;
+
+        args->op_ret   = op_ret;
+        args->op_errno = op_errno;
+        if (xdata)
+                args->xdata  = dict_ref (xdata);
+        if (lease)
+                args->lease = *lease;
+
+        __wake (args);
+
+        return 0;
+}
+
+int
+syncop_lease (xlator_t *subvol, loc_t *loc, struct gf_lease *lease,
+              dict_t *xdata_in, dict_t **xdata_out)
+{
+        struct syncargs args = {0, };
+
+        SYNCOP (subvol, (&args), syncop_lease_cbk, subvol->fops->lease,
+                loc, lease, xdata_in);
+
+        *lease = args.lease;
+
+        if (args.xdata) {
+                if (xdata_out) {
+                        /*
+                         * We're passing this reference to the caller, along
+                         * with the pointer itself.  That means they're
+                         * responsible for calling dict_unref at some point.
+                         */
+                        *xdata_out = args.xdata;
+                } else {
+                        dict_unref(args.xdata);
+                }
+        }
+
+        if (args.op_ret < 0)
+                return -args.op_errno;
+        return args.op_ret;
+}
+
+int
 syncop_lk_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 	       int op_ret, int op_errno, struct gf_flock *flock,
 	       dict_t *xdata)
@@ -2861,7 +2959,6 @@ syncop_lk_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
 
         return 0;
 }
-
 
 int
 syncop_lk (xlator_t *subvol, fd_t *fd, int cmd, struct gf_flock *flock,
@@ -2981,4 +3078,129 @@ syncop_fxattrop (xlator_t *subvol, fd_t *fd, gf_xattrop_flags_t flags,
                 return -args.op_errno;
 
         return args.op_ret;
+}
+
+int32_t
+syncop_getactivelk_cbk (call_frame_t *frame,
+                         void *cookie,
+                         xlator_t *this,
+                         int32_t op_ret,
+                         int32_t op_errno,
+                         lock_migration_info_t *locklist, dict_t *xdata)
+{
+        struct syncargs *args = NULL;
+        lock_migration_info_t   *tmp = NULL;
+        lock_migration_info_t   *entry = NULL;
+
+        args = cookie;
+
+        INIT_LIST_HEAD (&args->locklist.list);
+
+        args->op_ret   = op_ret;
+        args->op_errno = op_errno;
+        if (xdata)
+                args->xdata  = dict_ref (xdata);
+
+        if (op_ret > 0) {
+                list_for_each_entry (tmp, &locklist->list, list) {
+                        entry = GF_CALLOC (1, sizeof (lock_migration_info_t),
+                                          gf_common_mt_char);
+
+                        if (!entry) {
+                                gf_msg (THIS->name, GF_LOG_ERROR, 0, 0,
+                                        "lock mem allocation  failed");
+                                gf_free_mig_locks (&args->locklist);
+
+                                break;
+                        }
+
+                        INIT_LIST_HEAD (&entry->list);
+
+                        entry->flock = tmp->flock;
+
+                        entry->lk_flags = tmp->lk_flags;
+
+                        entry->client_uid = gf_strdup (tmp->client_uid);
+
+                        list_add_tail (&entry->list, &args->locklist.list);
+
+                }
+        }
+
+        __wake (args);
+
+        return 0;
+
+}
+
+int
+syncop_getactivelk (xlator_t *subvol, loc_t *loc,
+                    lock_migration_info_t *locklist,  dict_t *xdata_in,
+                    dict_t **xdata_out)
+{
+        struct syncargs args = {0, };
+
+        SYNCOP (subvol, (&args), syncop_getactivelk_cbk,
+                subvol->fops->getactivelk,
+                loc, xdata_in);
+
+        if (locklist)
+                list_splice_init (&args.locklist.list, &locklist->list);
+        else
+                gf_free_mig_locks (&args.locklist) ;
+
+        if (xdata_out)
+                *xdata_out = args.xdata;
+        else if (args.xdata)
+                dict_unref (args.xdata);
+
+        if (args.op_ret < 0)
+                return -args.op_errno;
+
+        return args.op_ret;
+
+}
+
+int
+syncop_setactivelk_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
+                          int32_t op_ret, int32_t op_errno, dict_t *xdata)
+{
+        struct syncargs *args = NULL;
+
+        args = cookie;
+
+        args->op_ret   = op_ret;
+        args->op_errno = op_errno;
+
+        if (xdata)
+                args->xdata  = dict_ref (xdata);
+
+
+        __wake (args);
+
+        return 0;
+
+}
+
+int
+syncop_setactivelk (xlator_t *subvol, loc_t *loc,
+                     lock_migration_info_t *locklist,  dict_t *xdata_in,
+                     dict_t **xdata_out)
+{
+        struct syncargs args = {0, };
+
+        SYNCOP (subvol, (&args), syncop_setactivelk_cbk,
+                subvol->fops->setactivelk,
+                loc, locklist, xdata_in);
+
+        if (xdata_out)
+                *xdata_out = args.xdata;
+        else if (args.xdata)
+                dict_unref (args.xdata);
+
+        if (args.op_ret < 0)
+                return -args.op_errno;
+
+        return args.op_ret;
+
 }

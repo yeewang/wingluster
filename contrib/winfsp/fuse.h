@@ -6,7 +6,7 @@
  *     FUSE: Filesystem in Userspace
  *     Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
  *
- * @copyright 2015-2016 Bill Zissimopoulos
+ * @copyright 2015-2017 Bill Zissimopoulos
  */
 /*
  * This file is part of WinFsp.
@@ -118,6 +118,8 @@ FSP_FUSE_API int FSP_FUSE_API_NAME(fsp_fuse_loop_mt)(struct fsp_fuse_env *env,
     struct fuse *f);
 FSP_FUSE_API void FSP_FUSE_API_NAME(fsp_fuse_exit)(struct fsp_fuse_env *env,
     struct fuse *f);
+FSP_FUSE_API int FSP_FUSE_API_NAME(fsp_fuse_exited)(struct fsp_fuse_env *env,
+    struct fuse *f);
 FSP_FUSE_API struct fuse_context *FSP_FUSE_API_NAME(fsp_fuse_get_context)(struct fsp_fuse_env *env);
 
 FSP_FUSE_SYM(
@@ -168,6 +170,13 @@ FSP_FUSE_SYM(
 void fuse_exit(struct fuse *f),
 {
     FSP_FUSE_API_CALL(fsp_fuse_exit)
+        (fsp_fuse_env(), f);
+})
+
+FSP_FUSE_SYM(
+int fuse_exited(struct fuse *f),
+{
+    return FSP_FUSE_API_CALL(fsp_fuse_exited)
         (fsp_fuse_env(), f);
 })
 

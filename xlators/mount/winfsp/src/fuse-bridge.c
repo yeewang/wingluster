@@ -253,19 +253,28 @@ fuse_invalidate_inode (xlator_t* this, uint64_t fuse_ino)
 }
 
 static int
+fuse_root_lookup_cbk (call_frame_t *frame, void *cookie, xlator_t *this,
+                      int32_t op_ret, int32_t op_errno,
+                      inode_t *inode, struct iatt *stat, dict_t *dict,
+                      struct iatt *postparent);
+
+static int
 fuse_attr_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                int32_t op_ret, int32_t op_errno, struct iatt* buf,
                dict_t* xdata)
 {
         fuse_state_t* state;
+        fuse_in_header_t *finh;
         fuse_private_t* priv = NULL;
         struct fuse_attr_out fao;
         winfsp_msg_t* stub = NULL;
         winfsp_getattr_t* dd = NULL;
         struct fuse_entry_out* feo = NULL;
+        int ret = -1;
 
         priv = this->private;
         state = frame->root->state;
+        finh  = state->finh;
 
         stub = (winfsp_msg_t*)state->stub;
         if (stub->type == FUSE_GETATTR)
@@ -292,31 +301,50 @@ fuse_attr_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                 fao.attr_valid_nsec =
                   calc_timeout_nsec (priv->attribute_timeout);
 
-                /*
-                if (state->loc.inode) {
-                        memcpy(&state->loc.inode->iatt, buf, sizeof(*buf));
-                }
-                */
-
                 if (stub->type == FUSE_GETATTR)
                         gf_fuse_stat2winstat (buf, dd->stbuf);
-                else if (stub->type == FUSE_LOOKUP) {
-                        // memcpy(&feo->attr, buf, sizeof(*buf));
-                        // feo->nodeid = buf->ia_ino;
-                }
 
                 winfsp_send_result (this, stub, 0);
         } else {
-                GF_LOG_OCCASIONALLY (
-                  gf_fuse_conn_err_log, "glusterfs-fuse", GF_LOG_WARNING,
-                  "%" PRIu64 ": %s() %s => -1 (%s)", frame->root->unique,
-                  gf_fop_list[frame->root->op],
-                  state->loc.path ? state->loc.path : "ERR",
-                  strerror (op_errno));
+                /* This is moved here from fuse_getattr(). It makes sense as
+                   in few cases, like the self-heal processes, some
+                   translators expect a lookup() to come on root inode
+                   (inode number 1). This will make sure we don't fail in any
+                   case, but the positive path will get better performance,
+                   by following common path for all the cases */
+                if ((finh->nodeid == 1) && (state->gfid[15] != 1)) {
+                        /* The 'state->gfid[15]' check is added to prevent the
+                           infinite recursions */
+                        state->gfid[15] = 1;
+
+                        ret = fuse_loc_fill (&state->loc, state, finh->nodeid,
+                                             0, NULL);
+                        if (ret < 0) {
+                                gf_log ("glusterfs-fuse", GF_LOG_WARNING,
+                                        "%"PRIu64": loc_fill() on / failed",
+                                        finh->unique);
+                                winfsp_send_err (this, state->stub, ENOENT);
+                                goto exit;
+                        }
+
+                        fuse_gfid_set (state);
+
+                        FUSE_FOP (state, fuse_root_lookup_cbk, GF_FOP_LOOKUP,
+                                  lookup, &state->loc, state->xdata);
+
+                        return 0;
+                }
+
+                gf_log ("glusterfs-fuse", GF_LOG_WARNING, "%"PRIu64": %s() "
+                        "%s => -1 (%s)", frame->root->unique,
+                                      gf_fop_list[frame->root->op],
+                                      state->loc.path ? state->loc.path : "ERR",
+                                      strerror (op_errno));
 
                 winfsp_send_err (this, state->stub, op_errno);
         }
 
+exit:
         free_fuse_state (state);
         STACK_DESTROY (frame->root);
 
@@ -587,8 +615,8 @@ fuse_lookup (xlator_t* this, winfsp_msg_t* msg)
                                  bname);
 
         gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
-                "%" PRIu64 ": LOOKUP path: %s, name: %s",
-                msg->unique, path, bname);
+                "%" PRIu64 ": LOOKUP nodeid:%ld, path: %s, name: %s",
+                msg->unique, finh->nodeid, path, bname);
 
         fuse_resolve_and_resume (state, fuse_lookup_resume);
 
@@ -747,26 +775,6 @@ fuse_getattr (xlator_t* this, winfsp_msg_t* msg)
         FILL_STATE (msg, this, finh, args->path, state);
 
         state->stub = msg;
-
-        if (finh->nodeid == 1) {
-                state->gfid[15] = 1;
-
-                ret = fuse_loc_fill (&state->loc, state, finh->nodeid, 0, NULL);
-                if (ret < 0) {
-                        gf_log ("glusterfs-fuse", GF_LOG_WARNING,
-                                "GETATTR on / (fuse_loc_fill() failed)");
-                        winfsp_send_err (this, state->stub, ENOENT);
-                        free_fuse_state (state);
-                        return;
-                }
-
-                fuse_gfid_set (state);
-
-                FUSE_FOP (state, fuse_root_lookup_cbk, GF_FOP_LOOKUP, lookup,
-                          &state->loc, state->xdata);
-
-                return;
-        }
 
         fuse_resolve_inode_init (state, &state->resolve, finh->nodeid);
 
@@ -5274,7 +5282,7 @@ fuse_thread_proc (void* data)
                 }
                 uv_mutex_unlock (&priv->msg_mutex);
 
-#ifdef DEBUG
+#if 0//def DEBUG
 
                 if (msg->type == FUSE_LOOKUP) {
 #if 0
