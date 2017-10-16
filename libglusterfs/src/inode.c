@@ -52,11 +52,9 @@ hash_dentry (inode_t *parent, const char *name, int mod)
         int ret = 0;
 
         hash = *name;
-        hash = tolower(*name);
         if (hash) {
                 for (name += 1; *name != '\0'; name++) {
                         hash = (hash << 5) - hash + *name;
-                        hash = (hash << 5) - hash + tolower(*name);
                 }
         }
         ret = (hash + (unsigned long)parent) % mod;
@@ -296,7 +294,7 @@ __dentry_search_for_inode (inode_t *inode, uuid_t pargfid, const char *name)
 
         list_for_each_entry (tmp, &inode->dentry_list, inode_list) {
                 if ((gf_uuid_compare (tmp->parent->gfid, pargfid) == 0) &&
-                    !strcasecmp (tmp->name, name)) {
+                    !strcmp (tmp->name, name)) {
                         dentry = tmp;
                         break;
                 }
@@ -773,7 +771,7 @@ __dentry_grep (inode_table_t *table, inode_t *parent, const char *name)
         hash = hash_dentry (parent, name, table->hashsize);
 
         list_for_each_entry (tmp, &table->name_hash[hash], hash) {
-                if (tmp->parent == parent && !strcasecmp (tmp->name, name)) {
+                if (tmp->parent == parent && !strcmp (tmp->name, name)) {
                         dentry = tmp;
                         break;
                 }
