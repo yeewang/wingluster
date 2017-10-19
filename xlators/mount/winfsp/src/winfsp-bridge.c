@@ -34,37 +34,34 @@ winfsp_lookup (xlator_t* this, ino_t parent, char* bname)
         msg->autorelease = _gf_true;
 
         params = (winfsp_lookup_t*)msg->args;
-        params->this = this;
-        params->parent = parent;
-        params->basename = sh_strdup (bname);
-        params->path = NULL;
+        params->path = sh_strdup (bname);
+        params->lookup_length = strlen(bname);
+        params->lookup_offset = 0;
+        params->nodeid = parent;
 
         winfsp_send_req (msg);
 }
 
-static void
+static int
 winfsp_lookup_2 (xlator_t* this, char* path)
 {
-        fuse_private_t* priv = NULL;
-        int omit = 0;
         winfsp_msg_t* msg = NULL;
         winfsp_lookup_t* params = NULL;
-
-        priv = this->private;
+        int ret = -1;
 
         msg = winfsp_get_req (THIS, FUSE_LOOKUP, sizeof (winfsp_lookup_t));
         if (msg == NULL)
                 return;
 
-        msg->autorelease = _gf_true;
-
         params = (winfsp_lookup_t*)msg->args;
-        params->this = this;
-        params->parent = 0;
-        params->basename = NULL;
         params->path = sh_strdup (path);
+        params->lookup_length = strlen(path);
+        params->lookup_offset = 0;
+        params->nodeid = 0;
 
         winfsp_send_req (msg);
+        ret = winfsp_get_result_and_cleanup (msg);
+        return ret;
 }
 
 void
@@ -430,6 +427,8 @@ winfsp_read_base (const char* path, char* buf, size_t size, off_t offset,
         return winfsp_get_result_and_cleanup (msg);
 }
 
+#ifdef USE_READCACHE
+
 static int
 winfsp_read_cached (const char* path, char* buf, size_t size, off_t offset,
                     struct fuse_file_info* fi)
@@ -513,12 +512,14 @@ unlock:
 
         return ret;
 }
+#endif
 
 static int
 winfsp_read (const char* path, char* buf, size_t size, off_t offset,
              struct fuse_file_info* fi)
 {
         int ret = -1;
+#ifdef USE_READCACHE
         size_t seg_size = 0, off = 0, last = 0;
 
         if (size < MAX_READ_PAGE) {
@@ -539,6 +540,9 @@ winfsp_read (const char* path, char* buf, size_t size, off_t offset,
                 if (ret > 0)
                         ret = size;
         }
+#else
+        ret = winfsp_read_base (path, buf, size, offset, fi);
+#endif /* USE_READCACHE */
 
         return ret;
 }
@@ -771,8 +775,13 @@ static int
 winfsp_opendir (const char* path, struct fuse_file_info* fi)
 {
         int ret = -1;
+        xlator_t* this = THIS;
         winfsp_msg_t* msg = NULL;
         winfsp_opendir_t* params = NULL;
+
+        ret = winfsp_lookup_2 (this, path);
+        if (ret == ENOENT)
+                return ret;
 
         msg = winfsp_get_req (THIS, FUSE_OPENDIR, sizeof (winfsp_opendir_t));
         if (msg == NULL)
@@ -1376,6 +1385,7 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
         winfsp_msg_t* n = NULL;
         winfsp_autorelease_t* args = NULL;
         int notify = 0;
+        int retval = 0;
 
 #if 0
         gf_log (this->name, GF_LOG_INFO,
@@ -1398,15 +1408,19 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
                                   SH_CALLOC (1, sizeof (winfsp_msg_t) +
                                                   sizeof (winfsp_autorelease_t),
                                              gf_fuse_mt_winfsp_msg_t);
-                                if (release_msg == NULL)
-                                        return -1;
+                                if (release_msg == NULL) {
+                                        retval = -1;
+                                        goto unlock;
+                                }
 #else
                                 iobuf =
                                   iobuf_get2 (this->ctx->iobuf_pool,
                                               sizeof (winfsp_msg_t) +
                                                 sizeof (winfsp_autorelease_t));
-                                if (iobuf == NULL)
-                                        return -1;
+                                if (iobuf == NULL) {
+                                        retval = -1;
+                                        goto unlock;
+                                }
                                 release_msg = iobuf_ptr (iobuf);
                                 release_msg->iobuf = iobuf;
 #endif /* USE_IOBUF */
@@ -1424,6 +1438,7 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
                                 uv_cond_init (&release_msg->cond);
                         }
                 }
+unlock:
                 uv_mutex_unlock (&msg->mutex);
 
                 if (release_msg) {
@@ -1466,7 +1481,7 @@ winfsp_send_result (xlator_t* this, winfsp_msg_t* msg, int ret)
         }
         uv_mutex_unlock (&priv->msg_mutex);
 
-        return 0;
+        return retval;
 }
 
 int

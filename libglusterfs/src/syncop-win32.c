@@ -514,7 +514,7 @@ synctask_create (struct syncenv *env, size_t stacksize, synctask_fn_t fn,
 
         newtask->ctx.uc_stack.ss_sp   = newtask->stack;
 
-        makecontext (&newtask->ctx, (void (*)(void)) synctask_wrap, 2, newtask);
+        makecontext (&newtask->ctx, (void (*)(void)) synctask_wrap, 0);
 
         newtask->state = SYNCTASK_INIT;
 
@@ -832,6 +832,8 @@ syncenv_new (size_t stacksize, int procmin, int procmax)
 
         for (i = 0; i < newenv->procmin; i++) {
                 newenv->proc[i].env = newenv;
+                snprintf (thread_name, sizeof(thread_name),
+                          "%s%d", "sproc", (newenv->procs));
                 ret = gf_thread_create (&newenv->proc[i].processor, NULL,
                                         syncenv_processor, &newenv->proc[i],
                                         thread_name);
@@ -875,7 +877,7 @@ synclock_destroy (synclock_t *lock)
 
 	uv_cond_destroy (&lock->cond);
 	uv_mutex_destroy (&lock->guard);
-        return 0;
+	return 0;
 }
 
 
@@ -1112,7 +1114,7 @@ syncbarrier_destroy (struct syncbarrier *barrier)
 
 	uv_cond_destroy (&barrier->cond);
 	uv_mutex_destroy (&barrier->guard);
-        return 0;
+	return 0;
 }
 
 

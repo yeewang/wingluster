@@ -361,6 +361,9 @@ fuse_root_lookup_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
         return 0;
 }
 
+static void
+fuse_lookup_continue (winfsp_msg_t* msg, xlator_t* this, uint64_t nodeid, char* bname);
+
 static int
 fuse_entry_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                 int32_t op_ret, int32_t op_errno, inode_t* inode,
@@ -376,12 +379,13 @@ fuse_entry_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
         inode_t* linked_inode = NULL;
         uint64_t ctx_value = LOOKUP_NOT_NEEDED;
         winfsp_msg_t* stub = NULL;
+        winfsp_lookup_t* lookup_args = NULL;
+        char* bname = NULL;
 
         priv = this->private;
         state = frame->root->state;
         finh = state->finh;
         stub = (winfsp_msg_t*)state->stub;
-
         if (op_ret == 0) {
                 if (__is_root_gfid (state->loc.inode->gfid))
                         buf->ia_ino = 1;
@@ -444,7 +448,18 @@ fuse_entry_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                 feop->attr_valid_nsec =
                   calc_timeout_nsec (priv->attribute_timeout);
 
-                winfsp_send_result (this, stub, 0);
+                if (stub->type == FUSE_LOOKUP) {
+                        lookup_args = stub->args;
+                        if (lookup_args->lookup_offset < lookup_args->lookup_length) {
+                                bname = lookup_args->path + lookup_args->lookup_offset;
+                                lookup_args->lookup_offset += strlen(bname) + 1;
+                                fuse_lookup_continue (stub, this, feop->nodeid, bname);
+                                goto exit;
+                        }
+                        SH_FREE (lookup_args->path);
+                }
+
+                winfsp_send_result (this, stub, op_errno);
         } else {
                 gf_log ("glusterfs-fuse",
                         (op_errno == ENOENT ? GF_LOG_TRACE : GF_LOG_WARNING),
@@ -459,14 +474,14 @@ fuse_entry_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                                 feop->entry_valid_nsec =
                                   calc_timeout_nsec (priv->negative_timeout);
                         }
-
-                        winfsp_send_result (this, stub, op_errno);
-                } else {
-                        winfsp_send_err (this, stub, op_errno);
                 }
+
+                winfsp_send_result (this, stub, op_errno);
         }
 
+exit:
         free_fuse_state (state);
+
         STACK_DESTROY (frame->root);
         return 0;
 }
@@ -578,57 +593,107 @@ fuse_lookup_resume (fuse_state_t* state)
 }
 
 static void
+fuse_lookup_continue (winfsp_msg_t* msg, xlator_t* this, uint64_t nodeid, char* bname)
+{
+        fuse_state_t* state = NULL;
+        fuse_in_header_t* finh = NULL;
+        struct fuse_context* ctx = NULL;
+        int ret = -1;
+
+        ctx = get_fuse_header_in ();
+        INIT_FUSE_HEADER (finh, get_fuse_op_unique (), msg->type, ctx);
+        FILL_STATE (msg, this, finh, NULL, state);
+        finh->nodeid = nodeid;
+        state->stub = msg;
+
+        fuse_resolve_entry_init (state, &state->resolve, nodeid, bname);
+
+        gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
+                "%" PRIu64 ": LOOKUP nodeid:%ld, name: %s",
+                msg->unique, finh->nodeid, bname);
+
+        fuse_resolve_and_resume (state, fuse_lookup_resume);
+}
+
+static void
 fuse_lookup (xlator_t* this, winfsp_msg_t* msg)
 {
         winfsp_lookup_t* args = (winfsp_lookup_t*)msg->args;
         fuse_in_header_t* finh = msg->finh;
         fuse_state_t* state = NULL;
-        char* pbuf = NULL;
-        char* path = NULL;
+        inode_t *inode = NULL;
         char* bname = NULL;
+        uint64_t nodeid;
+        char *subdir = NULL;
+        char* endp = NULL;
 
-        if (args->path == NULL) {
+        if (args->nodeid != 0) {
+                gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
+                        "%" PRIu64 ": LOOKUP nodeid:%ld, name: %s",
+                        msg->unique, args->nodeid, args->path);
+
                 FILL_STATE (msg, this, finh, NULL, state);
-                finh->nodeid = args->parent;
-                bname = args->basename;
+                finh->nodeid = args->nodeid;
+
+                bname = args->path + args->lookup_offset;
+                inode = inode_grep (state->itable, finh->nodeid, bname);
+                if (inode) {
+                        if (!inode_needs_lookup (inode, this)) {
+                                winfsp_send_result (this, msg, 0);
+                                free_fuse_state (state);
+                                SH_FREE (args->path);
+                        }
+                        inode_unref (inode);
+                } else {
+                        state->stub = msg;
+
+                        fuse_resolve_entry_init (state, &state->resolve, finh->nodeid, bname);
+
+                        fuse_resolve_and_resume (state, fuse_lookup_resume);
+                }
         } else {
-                pbuf = sh_strdup (args->path);
-                bname = strrchr (pbuf, '/');
-                if (bname > pbuf) {
-                        path = pbuf;
-                        *bname = '\0';
-                        bname++;
-                }
-                else {
-                        path = "/";
-                        if (bname[1] == '\0')
-                                bname = path;
+                gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
+                        "%" PRIu64 ": LOOKUP fullpath: %s",
+                        msg->unique, args->path);
+
+                FILL_STATE (msg, this, finh, NULL, state);
+                state->stub = msg;
+
+                subdir = args->path;
+                inode = fuse_inode_from_path (this, subdir, state->itable);
+                while (inode == NULL) {
+                        endp = strrchr (subdir, '/');
+                        if (endp > subdir)
+                                *endp = '\0';
                         else
-                                bname++;
+                                subdir = "/";
+                        inode = fuse_inode_from_path (this, subdir, state->itable);
                 }
+                GF_ASSERT (inode);
 
-                FILL_STATE (msg, this, finh, path, state);
+                if (endp == NULL) {
+                        winfsp_send_result (state->this, state->stub, 0);
+                        free_fuse_state (state);
+                        SH_FREE (args->path);
+                } else {
+                        bname = endp + 1;
+                        if (*bname == '\0') {
+                                bname = "/";
+                        }
+                        args->lookup_offset = endp - args->path + 1 + strlen (bname) + 1;
+
+                        nodeid = inode_to_fuse_nodeid (inode);
+                        fuse_resolve_entry_init (state, &state->resolve, nodeid, bname);
+
+                        msg = state->stub;
+                        gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
+                                "%" PRIu64 ": LOOKUP nodeid:%ld, name: %s",
+                                msg->unique, nodeid, bname);
+
+                        fuse_resolve_and_resume (state, fuse_lookup_resume);
+                }
+                inode_unref (inode);
         }
-
-        state->stub = msg;
-        fuse_resolve_entry_init (state, &state->resolve, finh->nodeid,
-                                 bname);
-
-        gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
-                "%" PRIu64 ": LOOKUP nodeid:%ld, path: %s, name: %s",
-                msg->unique, finh->nodeid, path, bname);
-
-        fuse_resolve_and_resume (state, fuse_lookup_resume);
-
-
-        if (args->basename)
-                SH_FREE (args->basename);
-
-        if (args->path)
-                SH_FREE (args->path);
-
-        if (pbuf)
-                SH_FREE (pbuf);
 }
 
 static void
@@ -2951,8 +3016,6 @@ fuse_lookup_dir (xlator_t* this, winfsp_msg_t* msg)
         fd = fd_lookup (inode, state->finh->pid);
         inode_unref (inode);
 
-        state->size = 64 * 1024 * 1024; /* assume bufsize is 64MB */
-        state->off = 0;
         state->fd = fd;
 
         fuse_resolve_fd_init (state, &state->resolve, fd);
@@ -3072,7 +3135,6 @@ fuse_readdirp_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                 if ((strcmp (entry->d_name, ".") != 0) &&
                     (strcmp (entry->d_name, "..") != 0)) {
                         inode_lookup (linked_inode);
-                        inode_set_need_lookup (linked_inode, this);
                 }
 
                 feo->nodeid = inode_to_fuse_nodeid (linked_inode);
@@ -4284,7 +4346,6 @@ fuse_first_lookup_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
 
         if (op_ret == 0) {
                 inode_lookup (inode);
-                inode_set_need_lookup (inode, this);
 
                 gf_log (this->name, GF_LOG_TRACE,
                         "first lookup on root succeeded.");
@@ -5282,18 +5343,18 @@ fuse_thread_proc (void* data)
                 }
                 uv_mutex_unlock (&priv->msg_mutex);
 
-#if 0//def DEBUG
+#if 1
 
                 if (msg->type == FUSE_LOOKUP) {
-#if 0
+#if 1
                         winfsp_lookup_t* args = (winfsp_lookup_t*)msg->args;
                         gf_msg (this->name, GF_LOG_INFO, 0,
                                 LG_MSG_POLL_IGNORE_MULTIPLE_THREADS,
                                 "fuse recieved message type: %d, unique: %lu, "
                                 "parent: %" PRIu64 ", path:%s, basepath: %s",
-                                msg->type, msg->unique, args->parent,
+                                msg->type, msg->unique, args->nodeid,
                                 args->path ? args->path : "",
-                                args->basename ? args->basename : "");
+                                args->path ? args->path + args->lookup_offset : "");
 #endif /* NEVER */
                 } else if (msg->type == FUSE_AUTORELEASE) {
 
@@ -5517,8 +5578,10 @@ notify (xlator_t* this, int32_t event, void* data, ...)
 
         graph = data;
 
+#if 0
         gf_log ("fuse", GF_LOG_DEBUG, "got event %d on graph %d", event,
                 ((graph) ? graph->id : 0));
+#endif
 
         switch (event) {
                 case GF_EVENT_GRAPH_NEW:
@@ -5619,25 +5682,39 @@ mem_acct_init (xlator_t* this)
 }
 
 static fuse_handler_t* fuse_std_ops[FUSE_OP_HIGH] = {
-          [FUSE_LOOKUP] = fuse_lookup, [FUSE_FORGET] = fuse_forget,
-          [FUSE_GETATTR] = fuse_getattr, [FUSE_SETATTR] = fuse_setattr,
-          [FUSE_READLINK] = fuse_readlink, [FUSE_SYMLINK] = fuse_symlink,
+          [FUSE_LOOKUP] = fuse_lookup,
+          [FUSE_FORGET] = fuse_forget,
+          [FUSE_GETATTR] = fuse_getattr,
+          [FUSE_SETATTR] = fuse_setattr,
+          [FUSE_READLINK] = fuse_readlink,
+          [FUSE_SYMLINK] = fuse_symlink,
           [FUSE_MKNOD] = fuse_mknod,
           [FUSE_MKDIR] = fuse_mkdir,
-          [FUSE_UNLINK] = fuse_unlink, [FUSE_RMDIR] = fuse_rmdir,
-          [FUSE_RENAME] = fuse_rename, [FUSE_LINK] = fuse_link,
-          [FUSE_OPEN] = fuse_open, [FUSE_READ] = fuse_read,
-          [FUSE_WRITE] = fuse_write, [FUSE_STATFS] = fuse_statfs,
-          [FUSE_RELEASE] = fuse_release, [FUSE_FSYNC] = fuse_fsync,
-          [FUSE_SETXATTR] = fuse_setxattr, [FUSE_GETXATTR] = fuse_getxattr,
+          [FUSE_UNLINK] = fuse_unlink,
+          [FUSE_RMDIR] = fuse_rmdir,
+          [FUSE_RENAME] = fuse_rename,
+          [FUSE_LINK] = fuse_link,
+          [FUSE_OPEN] = fuse_open,
+          [FUSE_READ] = fuse_read,
+          [FUSE_WRITE] = fuse_write,
+          [FUSE_STATFS] = fuse_statfs,
+          [FUSE_RELEASE] = fuse_release,
+          [FUSE_FSYNC] = fuse_fsync,
+          [FUSE_SETXATTR] = fuse_setxattr,
+          [FUSE_GETXATTR] = fuse_getxattr,
           [FUSE_LISTXATTR] = fuse_listxattr,
-          [FUSE_REMOVEXATTR] = fuse_removexattr, [FUSE_FLUSH] = fuse_flush,
-          [FUSE_INIT] = fuse_init, [FUSE_OPENDIR] = fuse_opendir,
+          [FUSE_REMOVEXATTR] = fuse_removexattr,
+          [FUSE_FLUSH] = fuse_flush,
+          [FUSE_INIT] = fuse_init,
+          [FUSE_OPENDIR] = fuse_opendir,
           [FUSE_READDIR] = fuse_lookup_dir,
           [FUSE_RELEASEDIR] = fuse_releasedir,
-          [FUSE_FSYNCDIR] = fuse_fsyncdir, [FUSE_GETLK] = fuse_getlk,
-          [FUSE_SETLK] = fuse_setlk, [FUSE_SETLKW] = fuse_setlk,
-          [FUSE_ACCESS] = fuse_access, [FUSE_CREATE] = fuse_create,
+          [FUSE_FSYNCDIR] = fuse_fsyncdir,
+          [FUSE_GETLK] = fuse_getlk,
+          [FUSE_SETLK] = fuse_setlk,
+          [FUSE_SETLKW] = fuse_setlk,
+          [FUSE_ACCESS] = fuse_access,
+          [FUSE_CREATE] = fuse_create,
           /* [FUSE_INTERRUPT] */
           /* [FUSE_BMAP] */
           // [FUSE_DESTROY]     = fuse_destroy,
@@ -5649,7 +5726,8 @@ static fuse_handler_t* fuse_std_ops[FUSE_OP_HIGH] = {
           [FUSE_FALLOCATE] = fuse_fallocate,
           [FUSE_READDIRPLUS] = fuse_readdirp,
           [FUSE_WRITE_EX] = fuse_write_ex,
-          [FUSE_AUTORELEASE] = fuse_autorelease, [FUSE_WAITMSG] = fuse_waitmsg,
+          [FUSE_AUTORELEASE] = fuse_autorelease,
+          [FUSE_WAITMSG] = fuse_waitmsg,
 };
 
 static fuse_handler_t* fuse_dump_ops[FUSE_OP_HIGH];

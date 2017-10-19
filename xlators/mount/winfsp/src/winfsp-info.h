@@ -184,10 +184,10 @@ typedef struct
 
 typedef struct
 {
-        xlator_t* this;
-        const char *path;
-        ino_t parent;
-        const char* basename;
+        char* path; /* full path name */
+        size_t lookup_length; /* path name length */
+        size_t lookup_offset; /* lookup offset in the path name */
+        ino_t nodeid;
 } winfsp_lookup_t;
 
 typedef struct
