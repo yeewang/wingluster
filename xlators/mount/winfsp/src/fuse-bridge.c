@@ -639,9 +639,9 @@ fuse_lookup (xlator_t* this, winfsp_msg_t* msg)
                 inode = inode_grep (state->itable, finh->nodeid, bname);
                 if (inode) {
                         if (!inode_needs_lookup (inode, this)) {
+                                SH_FREE (args->path);
                                 winfsp_send_result (this, msg, 0);
                                 free_fuse_state (state);
-                                SH_FREE (args->path);
                         }
                         inode_unref (inode);
                 } else {
@@ -672,9 +672,9 @@ fuse_lookup (xlator_t* this, winfsp_msg_t* msg)
                 GF_ASSERT (inode);
 
                 if (endp == NULL) {
+                        SH_FREE (args->path);
                         winfsp_send_result (state->this, state->stub, 0);
                         free_fuse_state (state);
-                        SH_FREE (args->path);
                 } else {
                         bname = endp + 1;
                         if (*bname == '\0') {
