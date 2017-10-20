@@ -451,10 +451,14 @@ fuse_entry_cbk (call_frame_t* frame, void* cookie, xlator_t* this,
                 if (stub->type == FUSE_LOOKUP) {
                         lookup_args = stub->args;
                         if (lookup_args->lookup_offset < lookup_args->lookup_length) {
+                                free_fuse_state (state);
+                                STACK_DESTROY (frame->root);
+
                                 bname = lookup_args->path + lookup_args->lookup_offset;
                                 lookup_args->lookup_offset += strlen(bname) + 1;
                                 fuse_lookup_continue (stub, this, feop->nodeid, bname);
-                                goto exit;
+
+                                return;
                         }
                         SH_FREE (lookup_args->path);
                 }
@@ -626,6 +630,7 @@ fuse_lookup (xlator_t* this, winfsp_msg_t* msg)
         uint64_t nodeid;
         char *subdir = NULL;
         char* endp = NULL;
+        gf_boolean_t to_be_done = _gf_false;
 
         if (args->nodeid != 0) {
                 gf_log ("glusterfs-fuse", GF_LOG_DEBUG,
@@ -642,9 +647,13 @@ fuse_lookup (xlator_t* this, winfsp_msg_t* msg)
                                 SH_FREE (args->path);
                                 winfsp_send_result (this, msg, 0);
                                 free_fuse_state (state);
+                                to_be_done = _gf_true;
                         }
                         inode_unref (inode);
-                } else {
+                }
+
+                if (!to_be_done) {
+                        args->lookup_offset += strlen (bname) + 1;
                         state->stub = msg;
 
                         fuse_resolve_entry_init (state, &state->resolve, finh->nodeid, bname);
@@ -5343,7 +5352,7 @@ fuse_thread_proc (void* data)
                 }
                 uv_mutex_unlock (&priv->msg_mutex);
 
-#if 1
+#if 0
 
                 if (msg->type == FUSE_LOOKUP) {
 #if 1
